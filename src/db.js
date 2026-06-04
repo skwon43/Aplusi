@@ -57,7 +57,7 @@ export async function loadAllData() {
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
+      if (error) throw formatSupabaseError(error);
       return [key, data ?? []];
     }),
   );
@@ -88,7 +88,7 @@ export async function createRecord(collection, payload) {
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) throw formatSupabaseError(error);
   return data;
 }
 
@@ -114,7 +114,7 @@ export async function updateRecord(collection, id, payload) {
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) throw formatSupabaseError(error);
   return data;
 }
 
@@ -131,7 +131,7 @@ export async function deleteRecord(collection, id) {
   }
 
   const { error } = await supabase.from(tableMap[collection]).delete().eq("id", id);
-  if (error) throw error;
+  if (error) throw formatSupabaseError(error);
 }
 
 export async function uploadProjectFile({ projectId, file, versionNumber, actorName }) {
@@ -167,7 +167,7 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
     .from(projectFileBucket)
     .upload(storagePath, file, { upsert: false });
 
-  if (uploadError) throw uploadError;
+  if (uploadError) throw formatSupabaseError(uploadError);
 
   const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
 
@@ -207,7 +207,7 @@ export async function getProjectFileContent(fileRecord) {
     .from(projectFileBucket)
     .download(fileRecord.storage_path);
 
-  if (error) throw error;
+  if (error) throw formatSupabaseError(error);
   return data.text();
 }
 
@@ -227,7 +227,7 @@ export async function uploadShowcaseScreenshot(file) {
     .from(showcaseBucket)
     .upload(storagePath, file, { upsert: false });
 
-  if (uploadError) throw uploadError;
+  if (uploadError) throw formatSupabaseError(uploadError);
 
   const { data } = supabase.storage.from(showcaseBucket).getPublicUrl(storagePath);
 
@@ -292,4 +292,23 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+function formatSupabaseError(error) {
+  const message = error?.message || String(error);
+  const code = error?.code || "";
+
+  if (code === "PGRST204" || code === "PGRST205" || message.includes("schema cache")) {
+    return new Error(
+      `Supabase schema is not applied yet. Run supabase/schema.sql in the Supabase SQL Editor. Original error: ${message}`,
+    );
+  }
+
+  if (message.includes("row-level security") || code === "42501") {
+    return new Error(
+      `Supabase permission/RLS policy blocked this save. Run supabase/schema.sql again. Original error: ${message}`,
+    );
+  }
+
+  return error;
 }
