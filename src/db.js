@@ -19,7 +19,16 @@ export const tableMap = {
   showcaseFeedback: "showcase_feedback",
 };
 
-const orderedCollections = Object.keys(tableMap);
+export function getSaveTarget(collection) {
+  if (!isSupabaseReady) return `localStorage: ${localKey} > ${collection}`;
+
+  const storage = {
+    projectFiles: " + Storage bucket: project-files",
+    showcases: " + Storage bucket: showcase-screenshots",
+  };
+
+  return `Supabase table: public.${tableMap[collection]}${storage[collection] || ""}`;
+}
 
 function readLocalState() {
   const saved = window.localStorage.getItem(localKey);
@@ -40,14 +49,14 @@ export async function loadAllData() {
   }
 
   const entries = await Promise.all(
-    orderedCollections.map(async (collection) => {
+    Object.entries(tableMap).map(async ([key, table]) => {
       const { data, error } = await supabase
-        .from(tableMap[collection])
+        .from(table)
         .select("*")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return [collection, data ?? []];
+      return [key, data ?? []];
     }),
   );
 
@@ -62,11 +71,10 @@ export async function createRecord(collection, payload) {
       created_at: new Date().toISOString(),
       ...payload,
     };
-    const nextState = {
+    writeLocalState({
       ...state,
       [collection]: [record, ...(state[collection] ?? [])],
-    };
-    writeLocalState(nextState);
+    });
     return record;
   }
 
@@ -83,14 +91,11 @@ export async function createRecord(collection, payload) {
 export async function updateRecord(collection, id, payload) {
   if (!isSupabaseReady) {
     const state = withDefaults(readLocalState());
-    const nextState = {
-      ...state,
-      [collection]: state[collection].map((item) =>
-        item.id === id ? { ...item, ...payload } : item,
-      ),
-    };
-    writeLocalState(nextState);
-    return nextState[collection].find((item) => item.id === id);
+    const nextItems = state[collection].map((item) =>
+      item.id === id ? { ...item, ...payload } : item,
+    );
+    writeLocalState({ ...state, [collection]: nextItems });
+    return nextItems.find((item) => item.id === id);
   }
 
   const { data, error } = await supabase
@@ -107,11 +112,10 @@ export async function updateRecord(collection, id, payload) {
 export async function deleteRecord(collection, id) {
   if (!isSupabaseReady) {
     const state = withDefaults(readLocalState());
-    const nextState = {
+    writeLocalState({
       ...state,
       [collection]: state[collection].filter((item) => item.id !== id),
-    };
-    writeLocalState(nextState);
+    });
     return;
   }
 
@@ -121,7 +125,7 @@ export async function deleteRecord(collection, id) {
 
 export async function uploadProjectFile({ projectId, file, versionNumber, actorName }) {
   const resourceType = file.type.startsWith("image/") ? "image" : "file";
-  const payload = {
+  const basePayload = {
     project_id: projectId,
     resource_type: resourceType,
     original_name: file.name,
@@ -134,9 +138,9 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
   };
 
   if (!isSupabaseReady) {
-    const content = await readLocalFileContent(file);
+    const content = resourceType === "image" ? await fileToDataUrl(file) : await file.text();
     return createRecord("projectFiles", {
-      ...payload,
+      ...basePayload,
       storage_path: null,
       public_url: resourceType === "image" ? content : null,
       external_url: null,
@@ -151,13 +155,12 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
     .upload(storagePath, file, { upsert: false });
 
   if (uploadError) throw uploadError;
-
-  const { data: publicData } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
+  const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
 
   return createRecord("projectFiles", {
-    ...payload,
+    ...basePayload,
     storage_path: storagePath,
-    public_url: publicData.publicUrl,
+    public_url: data.publicUrl,
     external_url: null,
   });
 }
@@ -182,22 +185,9 @@ export async function createProjectLink({ projectId, title, url, actorName }) {
 
 export async function getProjectFileContent(fileRecord) {
   if (!fileRecord) return "";
-
-  if (fileRecord.resource_type === "link") {
-    return fileRecord.external_url ?? "";
-  }
-
-  if (!isSupabaseReady) {
-    return fileRecord.content || fileRecord.public_url || "";
-  }
-
-  if (fileRecord.resource_type === "image") {
-    return fileRecord.public_url ?? "";
-  }
-
-  if (!isTextLike(fileRecord)) {
-    return "이 파일은 텍스트 미리보기를 지원하지 않습니다. 다운로드 또는 원본 링크로 확인해주세요.";
-  }
+  if (fileRecord.resource_type === "link") return fileRecord.external_url ?? "";
+  if (!isSupabaseReady) return fileRecord.content || fileRecord.public_url || "";
+  if (fileRecord.resource_type === "image") return fileRecord.public_url ?? "";
 
   const { data, error } = await supabase.storage
     .from(projectFileBucket)
@@ -209,12 +199,8 @@ export async function getProjectFileContent(fileRecord) {
 
 export async function uploadShowcaseScreenshot(file) {
   if (!file) return { screenshot_path: null, screenshot_url: null };
-
   if (!isSupabaseReady) {
-    return {
-      screenshot_path: null,
-      screenshot_url: await fileToDataUrl(file),
-    };
+    return { screenshot_path: null, screenshot_url: await fileToDataUrl(file) };
   }
 
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -224,13 +210,8 @@ export async function uploadShowcaseScreenshot(file) {
     .upload(storagePath, file, { upsert: false });
 
   if (uploadError) throw uploadError;
-
-  const { data: publicData } = supabase.storage.from(showcaseBucket).getPublicUrl(storagePath);
-
-  return {
-    screenshot_path: storagePath,
-    screenshot_url: publicData.publicUrl,
-  };
+  const { data } = supabase.storage.from(showcaseBucket).getPublicUrl(storagePath);
+  return { screenshot_path: storagePath, screenshot_url: data.publicUrl };
 }
 
 export function subscribeWorkspace(onChange) {
@@ -238,26 +219,15 @@ export function subscribeWorkspace(onChange) {
 
   const channel = supabase.channel("a-and-i-workspace");
   Object.values(tableMap).forEach((table) => {
-    channel.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table },
-      () => onChange(),
-    );
+    channel.on("postgres_changes", { event: "*", schema: "public", table }, onChange);
   });
-
   channel.subscribe();
-  return () => {
-    supabase.removeChannel(channel);
-  };
+  return () => supabase.removeChannel(channel);
 }
 
 export function subscribePresence(userName, onPresence) {
   if (!isSupabaseReady) {
-    onPresence([
-      { user_name: userName, online_at: new Date().toISOString() },
-      { user_name: "서연", online_at: new Date().toISOString() },
-      { user_name: "준호", online_at: new Date().toISOString() },
-    ]);
+    onPresence([{ user_name: userName }, { user_name: "Mina" }, { user_name: "Joon" }]);
     return () => {};
   }
 
@@ -269,37 +239,16 @@ export function subscribePresence(userName, onPresence) {
   });
 
   channel.on("presence", { event: "sync" }, () => {
-    const state = channel.presenceState();
-    onPresence(Object.values(state).flat());
+    onPresence(Object.values(channel.presenceState()).flat());
   });
 
   channel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
-      await channel.track({
-        user_name: userName,
-        online_at: new Date().toISOString(),
-      });
+      await channel.track({ user_name: userName, online_at: new Date().toISOString() });
     }
   });
 
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}
-
-function isTextLike(fileRecord) {
-  const mime = fileRecord.mime_type ?? "";
-  const name = fileRecord.original_name ?? "";
-  return (
-    mime.startsWith("text/") ||
-    /\.(js|jsx|ts|tsx|css|html|json|md|txt|sql|py|java|kt|swift|go|rs|php)$/i.test(name)
-  );
-}
-
-async function readLocalFileContent(file) {
-  if (file.type.startsWith("image/")) return fileToDataUrl(file);
-  if (file.size > 2_000_000) return "2MB가 넘는 파일은 로컬 데모 모드에서 내용 미리보기를 생략합니다.";
-  return file.text();
+  return () => supabase.removeChannel(channel);
 }
 
 function fileToDataUrl(file) {
