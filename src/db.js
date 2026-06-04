@@ -22,12 +22,14 @@ export const tableMap = {
 export function getSaveTarget(collection) {
   if (!isSupabaseReady) return `localStorage: ${localKey} > ${collection}`;
 
-  const storage = {
+  const storageByCollection = {
     projectFiles: " + Storage bucket: project-files",
     showcases: " + Storage bucket: showcase-screenshots",
   };
 
-  return `Supabase table: public.${tableMap[collection]}${storage[collection] || ""}`;
+  return `Supabase table: public.${tableMap[collection]}${
+    storageByCollection[collection] || ""
+  }`;
 }
 
 function readLocalState() {
@@ -71,10 +73,12 @@ export async function createRecord(collection, payload) {
       created_at: new Date().toISOString(),
       ...payload,
     };
+
     writeLocalState({
       ...state,
       [collection]: [record, ...(state[collection] ?? [])],
     });
+
     return record;
   }
 
@@ -94,7 +98,12 @@ export async function updateRecord(collection, id, payload) {
     const nextItems = state[collection].map((item) =>
       item.id === id ? { ...item, ...payload } : item,
     );
-    writeLocalState({ ...state, [collection]: nextItems });
+
+    writeLocalState({
+      ...state,
+      [collection]: nextItems,
+    });
+
     return nextItems.find((item) => item.id === id);
   }
 
@@ -112,10 +121,12 @@ export async function updateRecord(collection, id, payload) {
 export async function deleteRecord(collection, id) {
   if (!isSupabaseReady) {
     const state = withDefaults(readLocalState());
+
     writeLocalState({
       ...state,
       [collection]: state[collection].filter((item) => item.id !== id),
     });
+
     return;
   }
 
@@ -138,7 +149,9 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
   };
 
   if (!isSupabaseReady) {
-    const content = resourceType === "image" ? await fileToDataUrl(file) : await file.text();
+    const content =
+      resourceType === "image" ? await fileToDataUrl(file) : await file.text();
+
     return createRecord("projectFiles", {
       ...basePayload,
       storage_path: null,
@@ -155,6 +168,7 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
     .upload(storagePath, file, { upsert: false });
 
   if (uploadError) throw uploadError;
+
   const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
 
   return createRecord("projectFiles", {
@@ -199,8 +213,12 @@ export async function getProjectFileContent(fileRecord) {
 
 export async function uploadShowcaseScreenshot(file) {
   if (!file) return { screenshot_path: null, screenshot_url: null };
+
   if (!isSupabaseReady) {
-    return { screenshot_path: null, screenshot_url: await fileToDataUrl(file) };
+    return {
+      screenshot_path: null,
+      screenshot_url: await fileToDataUrl(file),
+    };
   }
 
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -210,19 +228,29 @@ export async function uploadShowcaseScreenshot(file) {
     .upload(storagePath, file, { upsert: false });
 
   if (uploadError) throw uploadError;
+
   const { data } = supabase.storage.from(showcaseBucket).getPublicUrl(storagePath);
-  return { screenshot_path: storagePath, screenshot_url: data.publicUrl };
+
+  return {
+    screenshot_path: storagePath,
+    screenshot_url: data.publicUrl,
+  };
 }
 
 export function subscribeWorkspace(onChange) {
   if (!isSupabaseReady) return () => {};
 
   const channel = supabase.channel("a-and-i-workspace");
+
   Object.values(tableMap).forEach((table) => {
     channel.on("postgres_changes", { event: "*", schema: "public", table }, onChange);
   });
+
   channel.subscribe();
-  return () => supabase.removeChannel(channel);
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 export function subscribePresence(userName, onPresence) {
@@ -231,7 +259,8 @@ export function subscribePresence(userName, onPresence) {
     return () => {};
   }
 
-  const key = window.localStorage.getItem("a-and-i-presence-id") ?? crypto.randomUUID();
+  const key =
+    window.localStorage.getItem("a-and-i-presence-id") ?? crypto.randomUUID();
   window.localStorage.setItem("a-and-i-presence-id", key);
 
   const channel = supabase.channel("presence:a-and-i", {
@@ -244,11 +273,16 @@ export function subscribePresence(userName, onPresence) {
 
   channel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
-      await channel.track({ user_name: userName, online_at: new Date().toISOString() });
+      await channel.track({
+        user_name: userName,
+        online_at: new Date().toISOString(),
+      });
     }
   });
 
-  return () => supabase.removeChannel(channel);
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 function fileToDataUrl(file) {
