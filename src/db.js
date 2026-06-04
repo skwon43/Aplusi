@@ -4,10 +4,20 @@ import { isSupabaseReady, supabase } from "./supabaseClient";
 const localKey = "a-and-i-collaboration-state";
 const projectFileBucket = "project-files";
 const showcaseBucket = "showcase-screenshots";
+const collectionsWithUpdatedAt = new Set([
+  "projects",
+  "projectFolders",
+  "projectFiles",
+  "projectFeedback",
+  "fileComments",
+  "projectUpdates",
+]);
 
 export const tableMap = {
   projects: "projects",
+  projectFolders: "project_folders",
   projectFiles: "project_files",
+  projectFeedback: "project_feedback",
   projectComments: "project_comments",
   fileComments: "file_comments",
   projectUpdates: "project_updates",
@@ -18,6 +28,26 @@ export const tableMap = {
   showcases: "showcases",
   showcaseFeedback: "showcase_feedback",
 };
+
+const codeExtensions = new Set([
+  "c",
+  "cpp",
+  "css",
+  "html",
+  "java",
+  "js",
+  "json",
+  "jsx",
+  "md",
+  "py",
+  "sql",
+  "ts",
+  "tsx",
+  "txt",
+]);
+
+const documentExtensions = new Set(["doc", "docx", "pdf", "ppt", "pptx"]);
+const archiveExtensions = new Set(["7z", "rar", "tar", "gz", "zip"]);
 
 export function getSaveTarget(collection) {
   if (!isSupabaseReady) return `localStorage: ${localKey} > ${collection}`;
@@ -93,10 +123,17 @@ export async function createRecord(collection, payload) {
 }
 
 export async function updateRecord(collection, id, payload) {
+  const nextPayload = collectionsWithUpdatedAt.has(collection)
+    ? {
+        ...payload,
+        updated_at: payload.updated_at ?? new Date().toISOString(),
+      }
+    : payload;
+
   if (!isSupabaseReady) {
     const state = withDefaults(readLocalState());
     const nextItems = state[collection].map((item) =>
-      item.id === id ? { ...item, ...payload } : item,
+      item.id === id ? { ...item, ...nextPayload } : item,
     );
 
     writeLocalState({
@@ -109,7 +146,7 @@ export async function updateRecord(collection, id, payload) {
 
   const { data, error } = await supabase
     .from(tableMap[collection])
-    .update(payload)
+    .update(nextPayload)
     .eq("id", id)
     .select()
     .single();
@@ -134,30 +171,65 @@ export async function deleteRecord(collection, id) {
   if (error) throw formatSupabaseError(error);
 }
 
-export async function uploadProjectFile({ projectId, file, versionNumber, actorName }) {
-  const resourceType = file.type.startsWith("image/") ? "image" : "file";
+export async function deleteProjectBundle(projectId) {
+  if (!isSupabaseReady) {
+    const state = withDefaults(readLocalState());
+
+    writeLocalState({
+      ...state,
+      projects: state.projects.filter((project) => project.id !== projectId),
+      projectFolders: state.projectFolders.filter((folder) => folder.project_id !== projectId),
+      projectFiles: state.projectFiles.filter((file) => file.project_id !== projectId),
+      projectFeedback: state.projectFeedback.filter((feedback) => feedback.project_id !== projectId),
+      projectComments: state.projectComments.filter((comment) => comment.project_id !== projectId),
+      fileComments: state.fileComments.filter((comment) => comment.project_id !== projectId),
+      projectUpdates: state.projectUpdates.filter((update) => update.project_id !== projectId),
+      chatMessages: state.chatMessages.filter((message) => message.project_id !== projectId),
+      activityLogs: state.activityLogs.filter((log) => log.project_id !== projectId),
+    });
+
+    return;
+  }
+
+  await deleteRecord("projects", projectId);
+}
+
+export async function uploadProjectFile({
+  actorName,
+  file,
+  folderPath = "",
+  projectId,
+  relativePath = "",
+  versionNumber,
+}) {
+  const resourceType = getFileResourceType(file.name, file.type);
+  const normalizedFolder = normalizeFolderPath(folderPath);
   const basePayload = {
     project_id: projectId,
+    folder_path: normalizedFolder,
     resource_type: resourceType,
     original_name: file.name,
     file_name: file.name,
     mime_type: file.type || "application/octet-stream",
     size_bytes: file.size,
-    version_group: file.name,
+    version_group: `${normalizedFolder}/${file.name}`,
     version_number: versionNumber,
     created_by: actorName,
+    download_count: 0,
   };
 
   if (!isSupabaseReady) {
-    const content =
-      resourceType === "image" ? await fileToDataUrl(file) : await file.text();
+    const isText = isPreviewableTextFile({ original_name: file.name, mime_type: file.type, resource_type: resourceType });
+    const content = isText ? await file.text() : "";
+    const publicUrl = isText ? null : await fileToDataUrl(file);
 
     return createRecord("projectFiles", {
       ...basePayload,
       storage_path: null,
-      public_url: resourceType === "image" ? content : null,
+      public_url: publicUrl,
       external_url: null,
-      content: resourceType === "image" ? "" : content,
+      relative_path: relativePath,
+      content,
     });
   }
 
@@ -176,12 +248,15 @@ export async function uploadProjectFile({ projectId, file, versionNumber, actorN
     storage_path: storagePath,
     public_url: data.publicUrl,
     external_url: null,
+    relative_path: relativePath,
+    content: "",
   });
 }
 
-export async function createProjectLink({ projectId, title, url, actorName }) {
+export async function createProjectLink({ actorName, folderPath = "", projectId, title, url }) {
   return createRecord("projectFiles", {
     project_id: projectId,
+    folder_path: normalizeFolderPath(folderPath),
     resource_type: "link",
     original_name: title,
     file_name: title,
@@ -190,9 +265,10 @@ export async function createProjectLink({ projectId, title, url, actorName }) {
     storage_path: null,
     public_url: null,
     external_url: url,
-    version_group: title,
+    version_group: `${normalizeFolderPath(folderPath)}/${title}`,
     version_number: 1,
     created_by: actorName,
+    download_count: 0,
     content: "",
   });
 }
@@ -200,8 +276,9 @@ export async function createProjectLink({ projectId, title, url, actorName }) {
 export async function getProjectFileContent(fileRecord) {
   if (!fileRecord) return "";
   if (fileRecord.resource_type === "link") return fileRecord.external_url ?? "";
-  if (!isSupabaseReady) return fileRecord.content || fileRecord.public_url || "";
   if (fileRecord.resource_type === "image") return fileRecord.public_url ?? "";
+  if (!isPreviewableTextFile(fileRecord)) return "";
+  if (!isSupabaseReady) return fileRecord.content || "";
 
   const { data, error } = await supabase.storage
     .from(projectFileBucket)
@@ -209,6 +286,45 @@ export async function getProjectFileContent(fileRecord) {
 
   if (error) throw formatSupabaseError(error);
   return data.text();
+}
+
+export async function getProjectFileBlob(fileRecord) {
+  if (!fileRecord) return new Blob([""], { type: "text/plain" });
+
+  if (fileRecord.resource_type === "link") {
+    return new Blob([`[InternetShortcut]\nURL=${fileRecord.external_url || ""}\n`], {
+      type: "text/plain",
+    });
+  }
+
+  if (!isSupabaseReady) {
+    if (fileRecord.content) {
+      return new Blob([fileRecord.content], {
+        type: fileRecord.mime_type || "text/plain",
+      });
+    }
+
+    if (fileRecord.public_url) {
+      return fetch(fileRecord.public_url).then((response) => response.blob());
+    }
+
+    return new Blob([""], { type: fileRecord.mime_type || "application/octet-stream" });
+  }
+
+  if (fileRecord.storage_path) {
+    const { data, error } = await supabase.storage
+      .from(projectFileBucket)
+      .download(fileRecord.storage_path);
+
+    if (error) throw formatSupabaseError(error);
+    return data;
+  }
+
+  if (fileRecord.public_url) {
+    return fetch(fileRecord.public_url).then((response) => response.blob());
+  }
+
+  return new Blob([""], { type: fileRecord.mime_type || "application/octet-stream" });
 }
 
 export async function uploadShowcaseScreenshot(file) {
@@ -253,9 +369,20 @@ export function subscribeWorkspace(onChange) {
   };
 }
 
-export function subscribePresence(userName, onPresence) {
+export function subscribePresence(userName, context, onPresence) {
+  const presencePayload = {
+    user_name: userName,
+    project_id: context?.projectId ?? null,
+    file_id: context?.fileId ?? null,
+    online_at: new Date().toISOString(),
+  };
+
   if (!isSupabaseReady) {
-    onPresence([{ user_name: userName }, { user_name: "Mina" }, { user_name: "Joon" }]);
+    onPresence([
+      presencePayload,
+      { user_name: "Mina", project_id: context?.projectId ?? null, file_id: context?.fileId ?? null },
+      { user_name: "Joon", project_id: context?.projectId ?? null, file_id: null },
+    ]);
     return () => {};
   }
 
@@ -273,16 +400,44 @@ export function subscribePresence(userName, onPresence) {
 
   channel.subscribe(async (status) => {
     if (status === "SUBSCRIBED") {
-      await channel.track({
-        user_name: userName,
-        online_at: new Date().toISOString(),
-      });
+      await channel.track(presencePayload);
     }
   });
 
   return () => {
     supabase.removeChannel(channel);
   };
+}
+
+export function getFileExtension(name = "") {
+  return name.split(".").pop()?.toLowerCase() || "";
+}
+
+export function getFileResourceType(fileName = "", mimeType = "") {
+  const extension = getFileExtension(fileName);
+  if (mimeType.startsWith("image/")) return "image";
+  if (archiveExtensions.has(extension)) return "archive";
+  if (documentExtensions.has(extension)) return "document";
+  if (codeExtensions.has(extension) || mimeType.startsWith("text/")) return "code";
+  return "file";
+}
+
+export function isPreviewableTextFile(fileRecord) {
+  if (!fileRecord) return false;
+  const extension = getFileExtension(fileRecord.original_name);
+  return (
+    fileRecord.resource_type === "code" ||
+    codeExtensions.has(extension) ||
+    fileRecord.mime_type?.startsWith("text/")
+  );
+}
+
+export function normalizeFolderPath(path = "") {
+  return path
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("/");
 }
 
 function fileToDataUrl(file) {
