@@ -1,106 +1,193 @@
 import { emptyData, seedData } from "./data";
 import { isSupabaseReady, supabase } from "./supabaseClient";
 
-const localKey = "a-and-i-collaboration-state";
+const localKey = "a-and-i-phase-1-state";
+const thumbnailBucket = "thumbnails";
 const projectFileBucket = "project-files";
-const showcaseBucket = "showcase-screenshots";
-const collectionsWithUpdatedAt = new Set([
-  "projects",
-  "projectFolders",
-  "projectFiles",
-  "projectFeedback",
-  "fileComments",
-  "projectUpdates",
-]);
+let forceLocalMode = false;
 
 export const tableMap = {
   projects: "projects",
-  projectFolders: "project_folders",
+  projectVersions: "project_versions",
   projectFiles: "project_files",
-  projectFeedback: "project_feedback",
-  projectComments: "project_comments",
-  fileComments: "file_comments",
-  projectUpdates: "project_updates",
+  comments: "comments",
+  communityPosts: "community_posts",
   chatMessages: "chat_messages",
-  activityLogs: "activity_logs",
   ideas: "ideas",
-  ideaComments: "idea_comments",
-  showcases: "showcases",
-  showcaseFeedback: "showcase_feedback",
+  insights: "insights",
+  announcements: "announcements",
 };
 
-const codeExtensions = new Set([
-  "c",
-  "cpp",
-  "css",
-  "html",
-  "java",
-  "js",
-  "json",
-  "jsx",
-  "md",
-  "py",
-  "sql",
-  "ts",
-  "tsx",
-  "txt",
-]);
+const collectionsWithUpdatedAt = new Set(["projects", "communityPosts", "ideas", "insights", "announcements"]);
 
-const documentExtensions = new Set(["doc", "docx", "pdf", "ppt", "pptx"]);
-const archiveExtensions = new Set(["7z", "rar", "tar", "gz", "zip"]);
-
-export function getSaveTarget(collection) {
-  if (!isSupabaseReady) return `localStorage: ${localKey} > ${collection}`;
-
-  const storageByCollection = {
-    projectFiles: " + Storage bucket: project-files",
-    showcases: " + Storage bucket: showcase-screenshots",
-  };
-
-  return `Supabase table: public.${tableMap[collection]}${
-    storageByCollection[collection] || ""
-  }`;
+function shouldUseSupabase() {
+  return isSupabaseReady && !forceLocalMode;
 }
 
 function readLocalState() {
   const saved = window.localStorage.getItem(localKey);
-  return saved ? JSON.parse(saved) : seedData;
+  return saved ? withDefaults(JSON.parse(saved)) : seedData;
 }
 
 function writeLocalState(nextState) {
-  window.localStorage.setItem(localKey, JSON.stringify(nextState));
+  window.localStorage.setItem(localKey, JSON.stringify(withDefaults(nextState)));
 }
 
-function withDefaults(state) {
-  return { ...emptyData, ...state };
+function withDefaults(state = {}) {
+  return Object.fromEntries(
+    Object.entries(emptyData).map(([key, value]) => [key, Array.isArray(state[key]) ? state[key] : value]),
+  );
+}
+
+function shouldFallbackToLocal(error) {
+  const message = error?.message || String(error);
+  return (
+    message.includes("Failed to fetch") ||
+    message.includes("NetworkError") ||
+    message.includes("ERR_NETWORK") ||
+    message.includes("fetch") ||
+    message.includes("Supabase schema is not applied") ||
+    message.includes("Supabase permission/RLS policy blocked") ||
+    message.includes("Supabase storage bucket is missing")
+  );
+}
+
+function switchToLocalMode(error) {
+  if (!shouldFallbackToLocal(error)) return false;
+  forceLocalMode = true;
+  return true;
 }
 
 export async function loadAllData() {
-  if (!isSupabaseReady) {
+  if (!shouldUseSupabase()) {
     return { data: withDefaults(readLocalState()), source: "local" };
   }
 
+  try {
+    let data = await fetchSupabaseData();
+
+    if (isWorkspaceEmpty(data)) {
+      await seedSupabaseWorkspace();
+      data = await fetchSupabaseData();
+    }
+
+    return { data, source: "supabase" };
+  } catch (error) {
+    if (switchToLocalMode(error)) {
+      return { data: withDefaults(readLocalState()), source: "local" };
+    }
+    throw error;
+  }
+}
+
+async function fetchSupabaseData() {
   const entries = await Promise.all(
     Object.entries(tableMap).map(async ([key, table]) => {
-      const { data, error } = await supabase
-        .from(table)
-        .select("*")
-        .order("created_at", { ascending: false });
+      const { data, error } = await supabase.from(table).select("*").order("created_at", { ascending: false });
 
       if (error) throw formatSupabaseError(error);
       return [key, data ?? []];
     }),
   );
 
-  return { data: withDefaults(Object.fromEntries(entries)), source: "supabase" };
+  return normalizeWorkspace(withDefaults(Object.fromEntries(entries)));
+}
+
+function normalizeWorkspace(state) {
+  return {
+    ...state,
+    projects: state.projects.map((project) => ({
+      ...project,
+      builder_name: project.builder_name || project.owner_name || "A&I Builder",
+      thumbnail_url: project.thumbnail_url || project.image_url || null,
+      demo_url: project.demo_url || "",
+      github_url: project.github_url || "",
+    })),
+    projectFiles: state.projectFiles.map((file) => ({
+      ...file,
+      file_size: Number(file.file_size ?? file.size_bytes ?? 0),
+      file_url: file.file_url || file.public_url || file.external_url || "",
+      file_name: file.file_name || file.original_name || "download",
+    })),
+    insights: state.insights.map((item) => ({
+      ...item,
+      source_url: item.source_url || "",
+    })),
+  };
+}
+
+function isWorkspaceEmpty(state) {
+  return (
+    !state.projects.length &&
+    !state.ideas.length &&
+    !state.insights.length &&
+    !state.announcements.length
+  );
+}
+
+async function seedSupabaseWorkspace() {
+  const projectIds = new Map();
+  const versionIds = new Map();
+
+  for (const project of seedData.projects) {
+    const { id, ...payload } = project;
+    const savedProject = await insertSupabase("projects", payload);
+    projectIds.set(id, savedProject.id);
+  }
+
+  for (const version of seedData.projectVersions) {
+    const { id, project_id, ...payload } = version;
+    const savedVersion = await insertSupabase("projectVersions", {
+      ...payload,
+      project_id: projectIds.get(project_id),
+    });
+    versionIds.set(id, savedVersion.id);
+  }
+
+  for (const file of seedData.projectFiles) {
+    const { id: _id, version_id, ...payload } = file;
+    await insertSupabase("projectFiles", {
+      ...payload,
+      version_id: versionIds.get(version_id),
+    });
+  }
+
+  const commentIds = new Map();
+  const commentsByDepth = [...seedData.comments].sort((a, b) => Number(a.depth || 0) - Number(b.depth || 0));
+
+  for (const comment of commentsByDepth) {
+    const { id, target_id, parent_id, ...payload } = comment;
+    const savedComment = await insertSupabase("comments", {
+      ...payload,
+      target_id: projectIds.get(target_id) ?? target_id,
+      parent_id: parent_id ? commentIds.get(parent_id) ?? null : null,
+    });
+    commentIds.set(id, savedComment.id);
+  }
+
+  for (const collection of ["ideas", "insights", "announcements"]) {
+    for (const item of seedData[collection]) {
+      const { id: _id, ...payload } = item;
+      await insertSupabase(collection, payload);
+    }
+  }
+}
+
+async function insertSupabase(collection, payload) {
+  const { data, error } = await supabase.from(tableMap[collection]).insert(payload).select().single();
+  if (error) throw formatSupabaseError(error);
+  return data;
 }
 
 export async function createRecord(collection, payload) {
-  if (!isSupabaseReady) {
+  if (!tableMap[collection]) throw new Error(`Unknown collection: ${collection}`);
+
+  if (!shouldUseSupabase()) {
     const state = withDefaults(readLocalState());
     const record = {
       id: crypto.randomUUID(),
       created_at: new Date().toISOString(),
+      ...(collectionsWithUpdatedAt.has(collection) ? { updated_at: new Date().toISOString() } : {}),
       ...payload,
     };
 
@@ -112,29 +199,24 @@ export async function createRecord(collection, payload) {
     return record;
   }
 
-  const { data, error } = await supabase
-    .from(tableMap[collection])
-    .insert(payload)
-    .select()
-    .single();
-
-  if (error) throw formatSupabaseError(error);
-  return data;
+  try {
+    return await insertSupabase(collection, payload);
+  } catch (error) {
+    if (switchToLocalMode(error)) return createRecord(collection, payload);
+    throw error;
+  }
 }
 
 export async function updateRecord(collection, id, payload) {
+  if (!tableMap[collection]) throw new Error(`Unknown collection: ${collection}`);
+
   const nextPayload = collectionsWithUpdatedAt.has(collection)
-    ? {
-        ...payload,
-        updated_at: payload.updated_at ?? new Date().toISOString(),
-      }
+    ? { ...payload, updated_at: payload.updated_at ?? new Date().toISOString() }
     : payload;
 
-  if (!isSupabaseReady) {
+  if (!shouldUseSupabase()) {
     const state = withDefaults(readLocalState());
-    const nextItems = state[collection].map((item) =>
-      item.id === id ? { ...item, ...nextPayload } : item,
-    );
+    const nextItems = state[collection].map((item) => (item.id === id ? { ...item, ...nextPayload } : item));
 
     writeLocalState({
       ...state,
@@ -144,300 +226,208 @@ export async function updateRecord(collection, id, payload) {
     return nextItems.find((item) => item.id === id);
   }
 
-  const { data, error } = await supabase
-    .from(tableMap[collection])
-    .update(nextPayload)
-    .eq("id", id)
-    .select()
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from(tableMap[collection])
+      .update(nextPayload)
+      .eq("id", id)
+      .select()
+      .single();
 
-  if (error) throw formatSupabaseError(error);
-  return data;
+    if (error) throw formatSupabaseError(error);
+    return data;
+  } catch (error) {
+    if (switchToLocalMode(error)) return updateRecord(collection, id, payload);
+    throw error;
+  }
 }
 
 export async function deleteRecord(collection, id) {
-  if (!isSupabaseReady) {
-    const state = withDefaults(readLocalState());
+  if (!tableMap[collection]) throw new Error(`Unknown collection: ${collection}`);
 
+  if (!shouldUseSupabase()) {
+    const state = withDefaults(readLocalState());
     writeLocalState({
       ...state,
       [collection]: state[collection].filter((item) => item.id !== id),
     });
-
     return;
   }
 
-  const { error } = await supabase.from(tableMap[collection]).delete().eq("id", id);
-  if (error) throw formatSupabaseError(error);
+  try {
+    const { error } = await supabase.from(tableMap[collection]).delete().eq("id", id);
+    if (error) throw formatSupabaseError(error);
+  } catch (error) {
+    if (switchToLocalMode(error)) return deleteRecord(collection, id);
+    throw error;
+  }
 }
 
 export async function deleteProjectBundle(projectId) {
-  if (!isSupabaseReady) {
+  if (!shouldUseSupabase()) {
     const state = withDefaults(readLocalState());
+    const versionIds = state.projectVersions
+      .filter((version) => version.project_id === projectId)
+      .map((version) => version.id);
 
     writeLocalState({
       ...state,
       projects: state.projects.filter((project) => project.id !== projectId),
-      projectFolders: state.projectFolders.filter((folder) => folder.project_id !== projectId),
-      projectFiles: state.projectFiles.filter((file) => file.project_id !== projectId),
-      projectFeedback: state.projectFeedback.filter((feedback) => feedback.project_id !== projectId),
-      projectComments: state.projectComments.filter((comment) => comment.project_id !== projectId),
-      fileComments: state.fileComments.filter((comment) => comment.project_id !== projectId),
-      projectUpdates: state.projectUpdates.filter((update) => update.project_id !== projectId),
-      chatMessages: state.chatMessages.filter((message) => message.project_id !== projectId),
-      activityLogs: state.activityLogs.filter((log) => log.project_id !== projectId),
+      projectVersions: state.projectVersions.filter((version) => version.project_id !== projectId),
+      projectFiles: state.projectFiles.filter((file) => !versionIds.includes(file.version_id)),
+      comments: state.comments.filter((comment) => comment.target_id !== projectId),
     });
-
     return;
   }
+
+  const { error } = await supabase
+    .from(tableMap.comments)
+    .delete()
+    .eq("target_type", "project")
+    .eq("target_id", projectId);
+  if (error) throw formatSupabaseError(error);
 
   await deleteRecord("projects", projectId);
 }
 
-export async function uploadProjectFile({
-  actorName,
-  file,
-  folderPath = "",
-  projectId,
-  relativePath = "",
-  versionNumber,
-}) {
-  const resourceType = getFileResourceType(file.name, file.type);
-  const normalizedFolder = normalizeFolderPath(folderPath);
-  const basePayload = {
-    project_id: projectId,
-    folder_path: normalizedFolder,
-    resource_type: resourceType,
-    original_name: file.name,
+export async function deleteCommunityPostBundle(postId) {
+  if (!shouldUseSupabase()) {
+    const state = withDefaults(readLocalState());
+    writeLocalState({
+      ...state,
+      communityPosts: state.communityPosts.filter((post) => post.id !== postId),
+      comments: state.comments.filter(
+        (comment) => !(comment.target_type === "community" && comment.target_id === postId),
+      ),
+    });
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from(tableMap.comments)
+      .delete()
+      .eq("target_type", "community")
+      .eq("target_id", postId);
+    if (error) throw formatSupabaseError(error);
+
+    await deleteRecord("communityPosts", postId);
+  } catch (error) {
+    if (switchToLocalMode(error)) return deleteCommunityPostBundle(postId);
+    throw error;
+  }
+}
+
+export async function deleteContentBundle(collection, targetType, itemId) {
+  if (!tableMap[collection]) throw new Error(`Unknown collection: ${collection}`);
+
+  if (!shouldUseSupabase()) {
+    const state = withDefaults(readLocalState());
+    writeLocalState({
+      ...state,
+      [collection]: state[collection].filter((item) => item.id !== itemId),
+      comments: state.comments.filter(
+        (comment) => !(comment.target_type === targetType && comment.target_id === itemId),
+      ),
+    });
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from(tableMap.comments)
+      .delete()
+      .eq("target_type", targetType)
+      .eq("target_id", itemId);
+    if (error) throw formatSupabaseError(error);
+
+    await deleteRecord(collection, itemId);
+  } catch (error) {
+    if (switchToLocalMode(error)) return deleteContentBundle(collection, targetType, itemId);
+    throw error;
+  }
+}
+
+export function subscribeToChatMessages(onInsert) {
+  if (!shouldUseSupabase()) return null;
+
+  const channel = supabase
+    .channel("a-and-i-chat-messages")
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: tableMap.chatMessages },
+      (payload) => {
+        if (payload.new) onInsert(payload.new);
+      },
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+export async function uploadThumbnail(file) {
+  if (!file) return null;
+  if (!file.type?.startsWith("image/")) {
+    throw new Error("썸네일은 이미지 파일만 사용할 수 있습니다.");
+  }
+
+  if (!shouldUseSupabase()) return fileToDataUrl(file);
+
+  try {
+    const storagePath = `${Date.now()}-${safeFileName(file.name)}`;
+    const { error } = await supabase.storage.from(thumbnailBucket).upload(storagePath, file, { upsert: false });
+    if (error) throw formatSupabaseError(error);
+    const { data } = supabase.storage.from(thumbnailBucket).getPublicUrl(storagePath);
+    return data.publicUrl;
+  } catch (error) {
+    if (switchToLocalMode(error)) return uploadThumbnail(file);
+    throw error;
+  }
+}
+
+export async function uploadProjectFile({ file, versionId }) {
+  const payload = {
+    version_id: versionId,
     file_name: file.name,
-    mime_type: file.type || "application/octet-stream",
-    size_bytes: file.size,
-    version_group: `${normalizedFolder}/${file.name}`,
-    version_number: versionNumber,
-    created_by: actorName,
-    download_count: 0,
+    file_size: file.size,
   };
 
-  if (!isSupabaseReady) {
-    const isText = isPreviewableTextFile({ original_name: file.name, mime_type: file.type, resource_type: resourceType });
-    const content = isText ? await file.text() : "";
-    const publicUrl = isText ? null : await fileToDataUrl(file);
-
+  if (!shouldUseSupabase()) {
     return createRecord("projectFiles", {
-      ...basePayload,
-      storage_path: null,
-      public_url: publicUrl,
-      external_url: null,
-      relative_path: relativePath,
-      content,
+      ...payload,
+      file_url: await fileToDataUrl(file),
     });
   }
 
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const storagePath = `${projectId}/${Date.now()}-${safeName}`;
-  const { error: uploadError } = await supabase.storage
-    .from(projectFileBucket)
-    .upload(storagePath, file, { upsert: false });
+  try {
+    const storagePath = `${versionId}/${Date.now()}-${safeFileName(file.name)}`;
+    const { error } = await supabase.storage.from(projectFileBucket).upload(storagePath, file, { upsert: false });
+    if (error) throw formatSupabaseError(error);
+    const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
 
-  if (uploadError) throw formatSupabaseError(uploadError);
-
-  const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
-
-  return createRecord("projectFiles", {
-    ...basePayload,
-    storage_path: storagePath,
-    public_url: data.publicUrl,
-    external_url: null,
-    relative_path: relativePath,
-    content: "",
-  });
-}
-
-export async function createProjectLink({ actorName, folderPath = "", projectId, title, url }) {
-  return createRecord("projectFiles", {
-    project_id: projectId,
-    folder_path: normalizeFolderPath(folderPath),
-    resource_type: "link",
-    original_name: title,
-    file_name: title,
-    mime_type: "text/uri-list",
-    size_bytes: 0,
-    storage_path: null,
-    public_url: null,
-    external_url: url,
-    version_group: `${normalizeFolderPath(folderPath)}/${title}`,
-    version_number: 1,
-    created_by: actorName,
-    download_count: 0,
-    content: "",
-  });
-}
-
-export async function getProjectFileContent(fileRecord) {
-  if (!fileRecord) return "";
-  if (fileRecord.resource_type === "link") return fileRecord.external_url ?? "";
-  if (fileRecord.resource_type === "image") return fileRecord.public_url ?? "";
-  if (!isPreviewableTextFile(fileRecord)) return "";
-  if (!isSupabaseReady) return fileRecord.content || "";
-
-  const { data, error } = await supabase.storage
-    .from(projectFileBucket)
-    .download(fileRecord.storage_path);
-
-  if (error) throw formatSupabaseError(error);
-  return data.text();
+    return createRecord("projectFiles", {
+      ...payload,
+      file_url: data.publicUrl,
+    });
+  } catch (error) {
+    if (switchToLocalMode(error)) return uploadProjectFile({ file, versionId });
+    throw error;
+  }
 }
 
 export async function getProjectFileBlob(fileRecord) {
-  if (!fileRecord) return new Blob([""], { type: "text/plain" });
-
-  if (fileRecord.resource_type === "link") {
-    return new Blob([`[InternetShortcut]\nURL=${fileRecord.external_url || ""}\n`], {
-      type: "text/plain",
-    });
+  if (!fileRecord?.file_url) {
+    return new Blob([""], { type: "application/octet-stream" });
   }
 
-  if (!isSupabaseReady) {
-    if (fileRecord.content) {
-      return new Blob([fileRecord.content], {
-        type: fileRecord.mime_type || "text/plain",
-      });
-    }
-
-    if (fileRecord.public_url) {
-      return fetch(fileRecord.public_url).then((response) => response.blob());
-    }
-
-    return new Blob([""], { type: fileRecord.mime_type || "application/octet-stream" });
-  }
-
-  if (fileRecord.storage_path) {
-    const { data, error } = await supabase.storage
-      .from(projectFileBucket)
-      .download(fileRecord.storage_path);
-
-    if (error) throw formatSupabaseError(error);
-    return data;
-  }
-
-  if (fileRecord.public_url) {
-    return fetch(fileRecord.public_url).then((response) => response.blob());
-  }
-
-  return new Blob([""], { type: fileRecord.mime_type || "application/octet-stream" });
+  const response = await fetch(fileRecord.file_url);
+  return response.blob();
 }
 
-export async function uploadShowcaseScreenshot(file) {
-  if (!file) return { screenshot_path: null, screenshot_url: null };
-
-  if (!isSupabaseReady) {
-    return {
-      screenshot_path: null,
-      screenshot_url: await fileToDataUrl(file),
-    };
-  }
-
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const storagePath = `${Date.now()}-${safeName}`;
-  const { error: uploadError } = await supabase.storage
-    .from(showcaseBucket)
-    .upload(storagePath, file, { upsert: false });
-
-  if (uploadError) throw formatSupabaseError(uploadError);
-
-  const { data } = supabase.storage.from(showcaseBucket).getPublicUrl(storagePath);
-
-  return {
-    screenshot_path: storagePath,
-    screenshot_url: data.publicUrl,
-  };
-}
-
-export function subscribeWorkspace(onChange) {
-  if (!isSupabaseReady) return () => {};
-
-  const channel = supabase.channel("a-and-i-workspace");
-
-  Object.values(tableMap).forEach((table) => {
-    channel.on("postgres_changes", { event: "*", schema: "public", table }, onChange);
-  });
-
-  channel.subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}
-
-export function subscribePresence(userName, context, onPresence) {
-  const presencePayload = {
-    user_name: userName,
-    project_id: context?.projectId ?? null,
-    file_id: context?.fileId ?? null,
-    online_at: new Date().toISOString(),
-  };
-
-  if (!isSupabaseReady) {
-    onPresence([
-      presencePayload,
-      { user_name: "Mina", project_id: context?.projectId ?? null, file_id: context?.fileId ?? null },
-      { user_name: "Joon", project_id: context?.projectId ?? null, file_id: null },
-    ]);
-    return () => {};
-  }
-
-  const key =
-    window.localStorage.getItem("a-and-i-presence-id") ?? crypto.randomUUID();
-  window.localStorage.setItem("a-and-i-presence-id", key);
-
-  const channel = supabase.channel("presence:a-and-i", {
-    config: { presence: { key } },
-  });
-
-  channel.on("presence", { event: "sync" }, () => {
-    onPresence(Object.values(channel.presenceState()).flat());
-  });
-
-  channel.subscribe(async (status) => {
-    if (status === "SUBSCRIBED") {
-      await channel.track(presencePayload);
-    }
-  });
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}
-
-export function getFileExtension(name = "") {
-  return name.split(".").pop()?.toLowerCase() || "";
-}
-
-export function getFileResourceType(fileName = "", mimeType = "") {
-  const extension = getFileExtension(fileName);
-  if (mimeType.startsWith("image/")) return "image";
-  if (archiveExtensions.has(extension)) return "archive";
-  if (documentExtensions.has(extension)) return "document";
-  if (codeExtensions.has(extension) || mimeType.startsWith("text/")) return "code";
-  return "file";
-}
-
-export function isPreviewableTextFile(fileRecord) {
-  if (!fileRecord) return false;
-  const extension = getFileExtension(fileRecord.original_name);
-  return (
-    fileRecord.resource_type === "code" ||
-    codeExtensions.has(extension) ||
-    fileRecord.mime_type?.startsWith("text/")
-  );
-}
-
-export function normalizeFolderPath(path = "") {
-  return path
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("/");
+function safeFileName(name = "file") {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "-") || "file";
 }
 
 function fileToDataUrl(file) {
@@ -462,6 +452,12 @@ function formatSupabaseError(error) {
   if (message.includes("row-level security") || code === "42501") {
     return new Error(
       `Supabase permission/RLS policy blocked this save. Run supabase/schema.sql again. Original error: ${message}`,
+    );
+  }
+
+  if (message.includes("Bucket not found")) {
+    return new Error(
+      `Supabase storage bucket is missing. Run supabase/schema.sql in the Supabase SQL Editor. Original error: ${message}`,
     );
   }
 

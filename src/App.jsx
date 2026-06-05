@@ -1,2110 +1,2422 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
-  CheckCircle2,
+  BookOpen,
+  CheckCircle,
   ChevronRight,
-  Circle,
-  Clipboard,
   Copy,
-  Database,
   Download,
-  Edit3,
+  ExternalLink,
   FileArchive,
-  FileCode2,
   FileText,
-  Folder,
-  FolderOpen,
-  FolderPlus,
-  GalleryHorizontalEnd,
-  GitFork,
-  HardDrive,
-  Heart,
-  Image as ImageIcon,
+  Home,
   Lightbulb,
-  Link as LinkIcon,
-  Loader2,
+  Megaphone,
+  Menu,
   MessageCircle,
   Plus,
-  Radio,
-  Save,
+  Reply,
+  Search,
   Send,
-  Share2,
-  Trash2,
-  UploadCloud,
+  Sparkles,
+  Upload,
   Users,
   X,
 } from "lucide-react";
 import {
-  createProjectLink,
   createRecord,
+  deleteContentBundle,
+  deleteCommunityPostBundle,
   deleteProjectBundle,
-  deleteRecord,
-  getFileExtension,
   getProjectFileBlob,
-  getProjectFileContent,
-  getSaveTarget,
-  isPreviewableTextFile,
   loadAllData,
-  normalizeFolderPath,
-  subscribePresence,
-  subscribeWorkspace,
+  subscribeToChatMessages,
   updateRecord,
   uploadProjectFile,
-  uploadShowcaseScreenshot,
+  uploadThumbnail,
 } from "./db";
-import { emptyData } from "./data";
-import { isSupabaseReady } from "./supabaseClient";
+import LogoBlock from "./components/LogoBlock";
 import { createZipBlob } from "./zip";
 import "./App.css";
 
-const defaultUserName = "익명 메이커";
-
-const blankProject = {
-  title: "",
-  category: "웹앱",
-  description: "",
-  collaborators: "",
-  tags: "",
-  visibility: "public",
-};
-
-const blankLink = {
-  title: "",
-  url: "",
-};
-
-const blankUpdate = {
-  title: "",
-  body: "",
-};
-
-const blankIdea = {
-  title: "",
-  category: "아이디어",
-  body: "",
-};
-
-const blankShowcase = {
-  project_id: "",
-  title: "",
-  description: "",
-  demo_url: "",
-  screenshot: null,
-};
-
+const defaultProjectThumbnail = "/assets/default-project-thumbnail.png";
+const heroBuilderImage = "/assets/ai-hero-builder.png";
+const categoryTabs = ["All", "Web", "App", "Prompt", "Tool", "Game"];
+const communityCategories = ["자유", "질문", "공유", "도움요청"];
+const feedbackTypes = ["유용해요", "버그", "제안", "멋져요"];
 const projectTabs = [
-  { id: "files", label: "파일", icon: FileCode2 },
-  { id: "feedback", label: "피드백", icon: MessageCircle },
-  { id: "updates", label: "업데이트", icon: Clipboard },
-  { id: "chat", label: "채팅", icon: Send },
-  { id: "activity", label: "타임라인", icon: Radio },
+  { id: "intro", label: "소개" },
+  { id: "files", label: "파일" },
+  { id: "feedback", label: "피드백" },
+  { id: "updates", label: "업데이트" },
+];
+const topLevelMenuItems = [
+  { label: "홈", path: "/", icon: Home },
+  { label: "프로젝트", path: "/projects", icon: FileArchive },
+  { label: "아이디어", path: "/ideas", icon: Lightbulb },
+  { label: "인사이트", path: "/insights", icon: BookOpen },
+  { label: "공지사항", path: "/announcements", icon: Megaphone },
+  { label: "커뮤니티", path: "/community", icon: Users },
+  { label: "채팅방", path: "/chat", icon: MessageCircle },
 ];
 
+const contentConfig = {
+  ideas: {
+    badge: "아이디어",
+    ctaLabel: "아이디어 작성",
+    createSuccess: "아이디어가 작성되었습니다",
+    createTitle: "아이디어 작성",
+    deleteConfirm: "이 아이디어와 댓글을 삭제할까요?",
+    deleteSuccess: "아이디어가 삭제되었습니다",
+    detailBackLabel: "아이디어로 돌아가기",
+    title: "아이디어",
+    definition: "VibeCoding으로 만들고 싶은 아이디어를 공유하세요.",
+    editTitle: "아이디어 수정",
+    emptyBody: "아직 공유된 아이디어가 없습니다. 첫 번째 아이디어를 남겨보세요.",
+    emptyTitle: "아직 아이디어가 없습니다",
+    formDescription: "초기 앱 컨셉, 프롬프트, 워크플로우, 나중에 만들고 싶은 것을 남겨 주세요.",
+    targetType: "idea",
+    updateSuccess: "아이디어가 수정되었습니다",
+  },
+  insights: {
+    badge: "인사이트",
+    ctaLabel: "인사이트 작성",
+    createSuccess: "인사이트가 작성되었습니다",
+    createTitle: "인사이트 작성",
+    deleteConfirm: "이 인사이트와 댓글을 삭제할까요?",
+    deleteSuccess: "인사이트가 삭제되었습니다",
+    detailBackLabel: "인사이트로 돌아가기",
+    title: "인사이트",
+    definition: "AI 트렌드, 툴 사용기, 빌딩 경험을 나누는 공간입니다.",
+    editTitle: "인사이트 수정",
+    emptyBody: "아직 인사이트가 없습니다. 배운 점이나 AI 트렌드를 공유해보세요.",
+    emptyTitle: "아직 인사이트가 없습니다",
+    formDescription: "AI 트렌드, 툴 학습, 빌딩 경험, 시장 관찰을 정리해 주세요.",
+    hasSourceUrl: true,
+    targetType: "insight",
+    updateSuccess: "인사이트가 수정되었습니다",
+  },
+  announcements: {
+    badge: "공지사항",
+    ctaLabel: "공지 작성",
+    createSuccess: "공지사항이 작성되었습니다",
+    createTitle: "공지 작성",
+    deleteConfirm: "이 공지사항과 댓글을 삭제할까요?",
+    deleteSuccess: "공지사항이 삭제되었습니다",
+    detailBackLabel: "공지사항으로 돌아가기",
+    title: "공지사항",
+    definition: "A&I의 업데이트와 중요한 소식을 확인하세요.",
+    editTitle: "공지사항 수정",
+    emptyBody: "아직 공지사항이 없습니다.",
+    emptyTitle: "아직 공지사항이 없습니다",
+    formDescription: "A&I 업데이트, 릴리즈 노트, 운영 안내를 남겨 주세요.",
+    targetType: "announcement",
+    updateSuccess: "공지사항이 수정되었습니다",
+  },
+};
+const contentCollections = Object.keys(contentConfig);
+
 function App() {
-  const [view, setView] = useState("projects");
+  const [route, setRoute] = useState(readRoute);
   const [data, setData] = useState(null);
-  const [dataSource, setDataSource] = useState("local");
-  const [currentUser, setCurrentUser] = useState(
-    () => localStorage.getItem("a-and-i-user-name") || defaultUserName,
-  );
-  const [presence, setPresence] = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
-  const [notice, setNotice] = useState("저장 준비가 끝났습니다.");
-  const [lastSave, setLastSave] = useState("아직 저장된 작업이 없습니다.");
-  const [categoryFilter, setCategoryFilter] = useState("전체");
-  const [selectedProjectId, setSelectedProjectId] = useState("");
-  const [selectedFileId, setSelectedFileId] = useState("");
-  const [projectTab, setProjectTab] = useState("files");
-  const [currentFolder, setCurrentFolder] = useState("");
-  const [filePreview, setFilePreview] = useState("");
-  const [projectEditOpen, setProjectEditOpen] = useState(false);
-  const [fileEditOpen, setFileEditOpen] = useState(false);
-  const [initialRouteApplied, setInitialRouteApplied] = useState(false);
-  const [forms, setForms] = useState({
-    project: blankProject,
-    projectEdit: blankProject,
-    fileEdit: { original_name: "", folder_path: "" },
-    folder: { name: "" },
-    link: blankLink,
-    update: blankUpdate,
-    idea: blankIdea,
-    showcase: blankShowcase,
-  });
-  const [drafts, setDrafts] = useState({
-    chat: "",
-    fileComment: "",
-    fileLineNumber: "",
-    projectFeedback: "",
-    projectFeedbackType: "suggestion",
-  });
+  const [toast, setToast] = useState(null);
+  const [editingProject, setEditingProject] = useState(null);
+  const [detailTab, setDetailTab] = useState("intro");
 
   const refresh = useCallback(async () => {
     const result = await loadAllData();
     setData(result.data);
-    setDataSource(result.source);
     return result.data;
   }, []);
 
   useEffect(() => {
     refresh().catch((error) => {
-      setNotice(`불러오기 실패: ${error.message}`);
-      setData(emptyData);
+      setToast({ tone: "error", title: "데이터를 불러오지 못했습니다", body: error.message });
     });
   }, [refresh]);
 
   useEffect(() => {
-    return subscribeWorkspace(() => {
-      refresh().catch((error) => setNotice(`실시간 동기화 실패: ${error.message}`));
-    });
-  }, [refresh]);
-
-  const selectedProject = useMemo(() => {
-    if (!data || !selectedProjectId) return null;
-    return data.projects.find((project) => project.id === selectedProjectId) || null;
-  }, [data, selectedProjectId]);
-
-  const projectFiles = useMemo(() => {
-    if (!data || !selectedProject) return [];
-    return data.projectFiles
-      .filter((file) => file.project_id === selectedProject.id)
-      .sort((a, b) => {
-        const folderDiff = (a.folder_path || "").localeCompare(b.folder_path || "");
-        if (folderDiff !== 0) return folderDiff;
-        return (a.original_name || "").localeCompare(b.original_name || "");
-      });
-  }, [data, selectedProject]);
-
-  const projectFolders = useMemo(() => {
-    if (!data || !selectedProject) return [];
-    return data.projectFolders.filter((folder) => folder.project_id === selectedProject.id);
-  }, [data, selectedProject]);
-
-  const folderNodes = useMemo(() => buildFolderNodes(projectFolders, projectFiles), [projectFolders, projectFiles]);
-
-  const currentFolders = useMemo(
-    () => folderNodes.filter((folder) => folder.parentPath === currentFolder),
-    [currentFolder, folderNodes],
-  );
-
-  const currentFiles = useMemo(
-    () => projectFiles.filter((file) => normalizeFolderPath(file.folder_path || "") === currentFolder),
-    [currentFolder, projectFiles],
-  );
-
-  const selectedFile = useMemo(() => {
-    if (!projectFiles.length) return null;
-    return projectFiles.find((file) => file.id === selectedFileId) || currentFiles[0] || projectFiles[0];
-  }, [currentFiles, projectFiles, selectedFileId]);
+    const handlePopState = () => setRoute(readRoute());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
-    const safeName = currentUser.trim() || defaultUserName;
-    localStorage.setItem("a-and-i-user-name", safeName);
-
-    return subscribePresence(
-      safeName,
-      {
-        projectId: selectedProjectId || null,
-        fileId: selectedFile?.id || null,
-      },
-      setPresence,
+    setDrawerOpen(false);
+    const isProjectDetail =
+      route.segments[0] === "projects" && Boolean(route.segments[1]) && route.segments[1] !== "new";
+    const requestedTab = route.query.get("tab");
+    setDetailTab(
+      isProjectDetail && projectTabs.some((tab) => tab.id === requestedTab) ? requestedTab : "intro",
     );
-  }, [currentUser, selectedFile?.id, selectedProjectId]);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  }, [route.pathname, route.search, route.query, route.segments]);
 
-  const categories = useMemo(() => {
-    if (!data) return ["전체"];
-    return ["전체", ...new Set(data.projects.map((project) => project.category || "기타"))];
-  }, [data]);
-
-  const visibleProjects = useMemo(() => {
-    if (!data) return [];
-    if (categoryFilter === "전체") return data.projects;
-    return data.projects.filter((project) => project.category === categoryFilter);
-  }, [data, categoryFilter]);
-
-  const projectPresence = useMemo(() => {
-    if (!selectedProject) return [];
-    return uniquePresence(presence.filter((user) => user.project_id === selectedProject.id));
-  }, [presence, selectedProject]);
-
-  const filePresence = useMemo(() => {
-    if (!selectedFile) return [];
-    return uniquePresence(presence.filter((user) => user.file_id === selectedFile.id));
-  }, [presence, selectedFile]);
-
-  useEffect(() => {
-    if (!data || initialRouteApplied) return;
-
-    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const projectId = params.get("project");
-    const fileId = params.get("file");
-    const folderPath = normalizeFolderPath(params.get("folder") || "");
-    const project = data.projects.find((item) => item.id === projectId);
-
-    if (project) {
-      setSelectedProjectId(project.id);
-      setSelectedFileId(fileId || "");
-      setCurrentFolder(folderPath);
-      setProjectTab("files");
-      setView("project-detail");
-      setForms((current) => ({
-        ...current,
-        projectEdit: projectToForm(project),
-      }));
-    }
-
-    setInitialRouteApplied(true);
-  }, [data, initialRouteApplied]);
-
-  useEffect(() => {
-    if (view !== "project-detail" || !selectedProjectId) return;
-
-    const params = new URLSearchParams();
-    params.set("project", selectedProjectId);
-    if (selectedFile?.id) params.set("file", selectedFile.id);
-    if (currentFolder) params.set("folder", currentFolder);
-
-    const nextHash = params.toString();
-    if (window.location.hash.replace(/^#/, "") !== nextHash) {
-      window.history.replaceState(null, "", `#${nextHash}`);
-    }
-  }, [currentFolder, selectedFile?.id, selectedProjectId, view]);
-
-  useEffect(() => {
-    if (!selectedFile) {
-      setFilePreview("");
-      return;
-    }
-
-    getProjectFileContent(selectedFile)
-      .then(setFilePreview)
-      .catch((error) => setFilePreview(`파일을 불러오지 못했습니다. ${error.message}`));
-
-    setForms((current) => ({
-      ...current,
-      fileEdit: {
-        original_name: selectedFile.original_name || "",
-        folder_path: selectedFile.folder_path || "",
-      },
-    }));
-  }, [selectedFile]);
-
-  if (!data) {
-    return (
-      <main className="loading-screen">
-        <Loader2 className="spin" />
-        <span>A&I를 불러오는 중입니다.</span>
-      </main>
-    );
+  function navigate(path) {
+    if (path === `${route.pathname}${route.search}`) return;
+    window.history.pushState({}, "", path);
+    setRoute(readRoute());
   }
 
-  async function runTask(collection, task, successMessage = "저장되었습니다.") {
+  function showToast(tone, title, body = "") {
+    setToast({ tone, title, body });
+    window.clearTimeout(showToast.timer);
+    showToast.timer = window.setTimeout(() => setToast(null), 3200);
+  }
+
+  async function runTask(task, successTitle, successBody = "") {
     setIsBusy(true);
     try {
       const result = await task();
-      const nextData = await refresh();
-      setNotice(successMessage);
-      setLastSave(`${getSaveTarget(collection)} / 현재 ${nextData[collection]?.length ?? 0}개`);
+      await refresh();
+      showToast("success", successTitle, successBody);
       return result;
     } catch (error) {
-      setNotice(`저장 실패: ${error.message}`);
+      showToast("error", "처리하지 못했습니다", error.message);
       return null;
     } finally {
       setIsBusy(false);
     }
   }
 
-  async function logActivity(projectId, message, actionType = "activity") {
-    await createRecord("activityLogs", {
-      project_id: projectId,
-      actor_name: currentUser.trim() || defaultUserName,
-      action_type: actionType,
-      message,
-    });
-  }
+  async function handleCreateProject(form) {
+    const project = await runTask(
+      async () => {
+        const thumbnailUrl = await uploadThumbnail(form.thumbnailFile);
+        const savedProject = await createRecord("projects", {
+          title: form.title.trim(),
+          builder_name: form.builder_name.trim(),
+          description: form.description.trim(),
+          category: form.category,
+          thumbnail_url: thumbnailUrl,
+          demo_url: form.demo_url.trim(),
+          github_url: form.github_url.trim(),
+        });
 
-  function updateForm(group, field, value) {
-    setForms((current) => ({
-      ...current,
-      [group]: {
-        ...current[group],
-        [field]: value,
+        const version = await createRecord("projectVersions", {
+          project_id: savedProject.id,
+          version_label: form.version_label.trim() || "v1.0",
+          change_summary: form.change_summary.trim() || "프로젝트가 등록되었습니다.",
+        });
+
+        for (const file of form.files) {
+          await uploadProjectFile({ file, versionId: version.id });
+        }
+
+        return savedProject;
       },
-    }));
+      "프로젝트가 등록되었습니다",
+      "첫 번째 빌더 루프를 시작할 수 있습니다.",
+    );
+
+    if (project) navigate(`/projects/${project.id}`);
   }
 
-  function resetForm(group, value) {
-    setForms((current) => ({
-      ...current,
-      [group]: value,
-    }));
+  async function handleCreateVersion(projectId, form) {
+    await runTask(
+      async () => {
+        const version = await createRecord("projectVersions", {
+          project_id: projectId,
+          version_label: form.version_label.trim(),
+          change_summary: form.change_summary.trim(),
+        });
+
+        for (const file of form.files) {
+          await uploadProjectFile({ file, versionId: version.id });
+        }
+
+        await updateRecord("projects", projectId, {});
+      },
+      "새 버전이 업로드되었습니다",
+      "파일 탭과 업데이트 기록에 반영했습니다.",
+    );
   }
 
-  function setDraft(key, value) {
-    setDrafts((current) => ({ ...current, [key]: value }));
+  async function handleUpdateProject(projectId, payload) {
+    const saved = await runTask(
+      () => updateRecord("projects", projectId, payload),
+      "프로젝트 정보가 수정되었습니다",
+    );
+    if (saved) setEditingProject(null);
   }
 
-  function clearRoute() {
-    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  async function handleDeleteProject(projectId) {
+    if (!window.confirm("이 프로젝트와 연결된 버전, 파일, 피드백을 삭제할까요?")) return;
+    const deleted = await runTask(
+      () => deleteProjectBundle(projectId),
+      "프로젝트가 삭제되었습니다",
+    );
+    if (deleted !== null) navigate("/projects");
   }
 
-  function openProject(projectId, options = {}) {
-    const project = data?.projects.find((item) => item.id === projectId);
-    setSelectedProjectId(projectId);
-    setSelectedFileId(options.fileId || "");
-    setCurrentFolder(options.folderPath || "");
-    setProjectTab("files");
-    setProjectEditOpen(false);
-    setFileEditOpen(false);
-    setView("project-detail");
+  async function handleCreateComment(projectId, payload) {
+    await runTask(
+      () =>
+        createRecord("comments", {
+          target_type: "project",
+          target_id: projectId,
+          parent_id: payload.parent?.id ?? null,
+          depth: payload.parent ? Math.min(Number(payload.parent.depth || 0) + 1, 2) : 0,
+          author_name: payload.author_name.trim(),
+          body: payload.body.trim(),
+          feedback_type: payload.parent ? null : payload.feedback_type,
+        }),
+      "피드백이 등록되었습니다",
+    );
+  }
 
-    if (project) {
-      setForms((current) => ({
+  async function handleCreateCommunityPost(form) {
+    const post = await runTask(
+      () =>
+        createRecord("communityPosts", {
+          title: form.title.trim(),
+          body: form.body.trim(),
+          author_name: form.author_name.trim(),
+          category: form.category || communityCategories[0],
+        }),
+      "커뮤니티 글이 등록되었습니다",
+    );
+
+    if (post) navigate(`/community/${post.id}`);
+  }
+
+  async function handleUpdateCommunityPost(postId, payload) {
+    const post = await runTask(
+      () =>
+        updateRecord("communityPosts", postId, {
+          title: payload.title.trim(),
+          body: payload.body.trim(),
+          author_name: payload.author_name.trim(),
+          category: payload.category || communityCategories[0],
+        }),
+      "커뮤니티 글이 수정되었습니다",
+    );
+
+    if (post) navigate(`/community/${post.id}`);
+  }
+
+  async function handleDeleteCommunityPost(postId) {
+    if (!window.confirm("이 커뮤니티 글과 댓글을 삭제할까요?")) return;
+    const deleted = await runTask(
+      () => deleteCommunityPostBundle(postId),
+      "커뮤니티 글이 삭제되었습니다",
+    );
+    if (deleted !== null) navigate("/community");
+  }
+
+  async function handleCreateCommunityComment(postId, payload) {
+    await runTask(
+      () =>
+        createRecord("comments", {
+          target_type: "community",
+          target_id: postId,
+          parent_id: payload.parent?.id ?? null,
+          depth: payload.parent ? Math.min(Number(payload.parent.depth || 0) + 1, 2) : 0,
+          author_name: payload.author_name.trim(),
+          body: payload.body.trim(),
+          feedback_type: null,
+        }),
+      "댓글이 등록되었습니다",
+    );
+  }
+
+  async function handleCreateContent(collection, form) {
+    const config = contentConfig[collection];
+    if (!config) return;
+
+    const item = await runTask(
+      () => createRecord(collection, buildContentPayload(collection, form)),
+      config.createSuccess,
+    );
+
+    if (item) navigate(`/${collection}/${item.id}`);
+  }
+
+  async function handleUpdateContent(collection, itemId, form) {
+    const config = contentConfig[collection];
+    if (!config) return;
+
+    const item = await runTask(
+      () => updateRecord(collection, itemId, buildContentPayload(collection, form)),
+      config.updateSuccess,
+    );
+
+    if (item) navigate(`/${collection}/${item.id}`);
+  }
+
+  async function handleDeleteContent(collection, itemId) {
+    const config = contentConfig[collection];
+    if (!config || !window.confirm(config.deleteConfirm)) return;
+
+    const deleted = await runTask(
+      () => deleteContentBundle(collection, config.targetType, itemId),
+      config.deleteSuccess,
+    );
+    if (deleted !== null) navigate(`/${collection}`);
+  }
+
+  async function handleCreateContentComment(collection, itemId, payload) {
+    const config = contentConfig[collection];
+    if (!config) return;
+
+    await runTask(
+      () =>
+        createRecord("comments", {
+          target_type: config.targetType,
+          target_id: itemId,
+          parent_id: payload.parent?.id ?? null,
+          depth: payload.parent ? Math.min(Number(payload.parent.depth || 0) + 1, 2) : 0,
+          author_name: payload.author_name.trim(),
+          body: payload.body.trim(),
+          feedback_type: null,
+        }),
+      "댓글이 등록되었습니다",
+    );
+  }
+
+  async function handleCreateChatMessage(payload) {
+    return runTask(
+      () =>
+        createRecord("chatMessages", {
+          author_name: payload.author_name.trim(),
+          body: payload.body.trim(),
+        }),
+      "메시지가 전송되었습니다",
+    );
+  }
+
+  const handleIncomingChatMessage = useCallback((message) => {
+    setData((current) => {
+      if (!current || current.chatMessages.some((item) => item.id === message.id)) return current;
+      return {
         ...current,
-        projectEdit: projectToForm(project),
-      }));
-    }
-  }
-
-  function goToProjects() {
-    clearRoute();
-    setSelectedProjectId("");
-    setSelectedFileId("");
-    setCurrentFolder("");
-    setView("projects");
-  }
-
-  function createProject() {
-    if (!forms.project.title.trim()) return;
-
-    runTask(
-      "projects",
-      async () => {
-        const project = await createRecord("projects", {
-          title: forms.project.title.trim(),
-          category: forms.project.category.trim() || "기타",
-          description: forms.project.description.trim(),
-          owner_name: currentUser.trim() || defaultUserName,
-          collaborators: parseCsv(forms.project.collaborators),
-          tags: parseCsv(forms.project.tags),
-          visibility: forms.project.visibility,
-          status: "진행 중",
-          likes: 0,
-          download_count: 0,
-          fork_count: 0,
-          original_project_id: null,
-          fork_author: null,
-          forked_at: null,
-        });
-
-        await logActivity(project.id, "프로젝트가 생성되었습니다.", "project_created");
-        resetForm("project", blankProject);
-        openProject(project.id);
-      },
-      "프로젝트가 생성되었습니다.",
-    );
-  }
-
-  function startEditProject() {
-    if (!selectedProject) return;
-    setForms((current) => ({
-      ...current,
-      projectEdit: projectToForm(selectedProject),
-    }));
-    setProjectEditOpen(true);
-  }
-
-  function saveProjectEdit() {
-    if (!selectedProject || !forms.projectEdit.title.trim()) return;
-
-    runTask(
-      "projects",
-      async () => {
-        await updateRecord("projects", selectedProject.id, {
-          title: forms.projectEdit.title.trim(),
-          category: forms.projectEdit.category.trim() || "기타",
-          description: forms.projectEdit.description.trim(),
-          collaborators: parseCsv(forms.projectEdit.collaborators),
-          tags: parseCsv(forms.projectEdit.tags),
-          visibility: forms.projectEdit.visibility,
-        });
-        await logActivity(selectedProject.id, "프로젝트 정보가 수정되었습니다.", "project_updated");
-        setProjectEditOpen(false);
-      },
-      "프로젝트 정보가 저장되었습니다.",
-    );
-  }
-
-  function deleteProject() {
-    if (!selectedProject) return;
-    if (!window.confirm("이 프로젝트와 연결된 파일, 댓글, 채팅을 모두 삭제할까요?")) return;
-
-    runTask(
-      "projects",
-      async () => {
-        await deleteProjectBundle(selectedProject.id);
-        goToProjects();
-      },
-      "프로젝트가 삭제되었습니다.",
-    );
-  }
-
-  function likeProject() {
-    if (!selectedProject) return;
-
-    runTask(
-      "projects",
-      async () => {
-        await updateRecord("projects", selectedProject.id, {
-          likes: Number(selectedProject.likes || 0) + 1,
-        });
-        await logActivity(selectedProject.id, "프로젝트에 좋아요가 추가되었습니다.", "project_liked");
-      },
-      "좋아요가 저장되었습니다.",
-    );
-  }
-
-  function forkProject() {
-    if (!selectedProject) return;
-
-    runTask(
-      "projects",
-      async () => {
-        const fork = await createRecord("projects", {
-          title: `${selectedProject.title} Remix`,
-          description: selectedProject.description,
-          category: selectedProject.category,
-          owner_name: currentUser.trim() || defaultUserName,
-          collaborators: [],
-          tags: selectedProject.tags || [],
-          visibility: "private",
-          status: "포크됨",
-          likes: 0,
-          download_count: 0,
-          fork_count: 0,
-          original_project_id: selectedProject.id,
-          fork_author: currentUser.trim() || defaultUserName,
-          forked_at: new Date().toISOString(),
-        });
-
-        for (const folder of projectFolders) {
-          await createRecord("projectFolders", {
-            project_id: fork.id,
-            name: folder.name,
-            folder_path: folder.folder_path || "",
-            created_by: currentUser.trim() || defaultUserName,
-          });
-        }
-
-        for (const file of projectFiles) {
-          await createRecord("projectFiles", {
-            ...copyFileRecord(file),
-            project_id: fork.id,
-            created_by: currentUser.trim() || defaultUserName,
-          });
-        }
-
-        await updateRecord("projects", selectedProject.id, {
-          fork_count: Number(selectedProject.fork_count || 0) + 1,
-        });
-        await logActivity(selectedProject.id, `${fork.title} 포크가 생성되었습니다.`, "project_forked");
-        await logActivity(fork.id, `${selectedProject.title}에서 포크되었습니다.`, "project_forked");
-        openProject(fork.id);
-      },
-      "프로젝트가 포크되었습니다.",
-    );
-  }
-
-  function createFolder() {
-    const folderName = forms.folder.name.trim();
-    if (!selectedProject || !folderName) return;
-
-    const fullPath = joinPath(currentFolder, folderName);
-    const exists = folderNodes.some((folder) => folder.path === fullPath);
-    if (exists) {
-      setNotice("이미 같은 이름의 폴더가 있습니다.");
-      return;
-    }
-
-    runTask(
-      "projectFolders",
-      async () => {
-        await createRecord("projectFolders", {
-          project_id: selectedProject.id,
-          name: folderName,
-          folder_path: currentFolder,
-          created_by: currentUser.trim() || defaultUserName,
-        });
-        resetForm("folder", { name: "" });
-        await logActivity(selectedProject.id, `${fullPath} 폴더가 생성되었습니다.`, "folder_created");
-      },
-      "폴더가 생성되었습니다.",
-    );
-  }
-
-  function uploadFiles(fileList) {
-    if (!selectedProject) return;
-
-    runTask(
-      "projectFiles",
-      async () => {
-        for (const file of Array.from(fileList)) {
-          const relativePath = file.webkitRelativePath || file.name;
-          const folderPath = deriveUploadFolder(relativePath, currentFolder);
-          const versionGroup = `${folderPath}/${file.name}`;
-          const versionNumber =
-            projectFiles.filter((item) => item.version_group === versionGroup).length + 1;
-
-          const savedFile = await uploadProjectFile({
-            projectId: selectedProject.id,
-            folderPath,
-            relativePath,
-            file,
-            versionNumber,
-            actorName: currentUser.trim() || defaultUserName,
-          });
-
-          setSelectedFileId(savedFile.id);
-          setCurrentFolder(folderPath);
-          await logActivity(
-            selectedProject.id,
-            `${file.name} 파일이 ${folderPath || "루트"}에 업로드되었습니다.`,
-            "file_uploaded",
-          );
-        }
-      },
-      "파일이 업로드되었습니다.",
-    );
-  }
-
-  function addLink() {
-    if (!selectedProject || !forms.link.title.trim() || !forms.link.url.trim()) return;
-
-    runTask(
-      "projectFiles",
-      async () => {
-        const link = await createProjectLink({
-          projectId: selectedProject.id,
-          folderPath: currentFolder,
-          title: forms.link.title.trim(),
-          url: forms.link.url.trim(),
-          actorName: currentUser.trim() || defaultUserName,
-        });
-
-        await logActivity(selectedProject.id, `${forms.link.title} 링크가 추가되었습니다.`, "link_added");
-        setSelectedFileId(link.id);
-        resetForm("link", blankLink);
-      },
-      "링크가 추가되었습니다.",
-    );
-  }
-
-  function saveFileEdit() {
-    if (!selectedProject || !selectedFile || !forms.fileEdit.original_name.trim()) return;
-
-    const nextFolder = normalizeFolderPath(forms.fileEdit.folder_path);
-    const nextName = forms.fileEdit.original_name.trim();
-
-    runTask(
-      "projectFiles",
-      async () => {
-        await updateRecord("projectFiles", selectedFile.id, {
-          original_name: nextName,
-          file_name: nextName,
-          folder_path: nextFolder,
-          version_group: `${nextFolder}/${nextName}`,
-        });
-        await logActivity(
-          selectedProject.id,
-          `${selectedFile.original_name} 파일이 ${joinPath(nextFolder, nextName)}로 정리되었습니다.`,
-          "file_renamed",
-        );
-        setCurrentFolder(nextFolder);
-        setFileEditOpen(false);
-      },
-      "파일 정보가 저장되었습니다.",
-    );
-  }
-
-  function deleteFile() {
-    if (!selectedProject || !selectedFile) return;
-    if (!window.confirm(`${selectedFile.original_name} 파일을 삭제할까요?`)) return;
-
-    runTask(
-      "projectFiles",
-      async () => {
-        await deleteRecord("projectFiles", selectedFile.id);
-        await logActivity(selectedProject.id, `${selectedFile.original_name} 파일이 삭제되었습니다.`, "file_deleted");
-        setSelectedFileId("");
-      },
-      "파일이 삭제되었습니다.",
-    );
-  }
-
-  async function copyFileShareLink() {
-    if (!selectedProject || !selectedFile) return;
-
-    const params = new URLSearchParams();
-    params.set("project", selectedProject.id);
-    params.set("file", selectedFile.id);
-    if (selectedFile.folder_path) params.set("folder", selectedFile.folder_path);
-    const shareUrl = `${window.location.origin}${window.location.pathname}#${params.toString()}`;
-
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setNotice("파일 공유 링크를 복사했습니다.");
-    } catch {
-      setNotice(`공유 링크: ${shareUrl}`);
-    }
-
-    logActivity(
-      selectedProject.id,
-      `${selectedFile.original_name} 파일 공유 링크가 생성되었습니다.`,
-      "file_shared",
-    )
-      .then(refresh)
-      .catch(() => {});
-  }
-
-  async function downloadFile(file = selectedFile) {
-    if (!selectedProject || !file) return;
-
-    setIsBusy(true);
-    try {
-      const blob = await getProjectFileBlob(file);
-      downloadBlob(blob, downloadNameForFile(file));
-      await updateRecord("projectFiles", file.id, {
-        download_count: Number(file.download_count || 0) + 1,
-      });
-      await updateRecord("projects", selectedProject.id, {
-        download_count: Number(selectedProject.download_count || 0) + 1,
-      });
-      await logActivity(selectedProject.id, `${file.original_name} 파일이 다운로드되었습니다.`, "file_downloaded");
-      await refresh();
-      setNotice("파일 다운로드를 시작했습니다.");
-    } catch (error) {
-      setNotice(`다운로드 실패: ${error.message}`);
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  async function downloadProjectZip() {
-    if (!selectedProject) return;
-
-    setIsBusy(true);
-    try {
-      const entries = [];
-
-      for (const file of projectFiles) {
-        const blob = await getProjectFileBlob(file);
-        entries.push({
-          name: joinPath(file.folder_path || "", downloadNameForFile(file)),
-          blob,
-          date: file.updated_at || file.created_at || new Date(),
-        });
-      }
-
-      if (!entries.length) {
-        entries.push({
-          name: "README.txt",
-          blob: new Blob(["이 프로젝트에는 아직 파일이 없습니다."], { type: "text/plain" }),
-        });
-      }
-
-      const zipBlob = await createZipBlob(entries);
-      downloadBlob(zipBlob, `${slugify(selectedProject.title)}.zip`);
-      await updateRecord("projects", selectedProject.id, {
-        download_count: Number(selectedProject.download_count || 0) + 1,
-      });
-      await logActivity(selectedProject.id, "프로젝트 ZIP이 다운로드되었습니다.", "project_downloaded");
-      await refresh();
-      setNotice("프로젝트 ZIP 다운로드를 시작했습니다.");
-    } catch (error) {
-      setNotice(`프로젝트 다운로드 실패: ${error.message}`);
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  function addFileComment(parentCommentId = null) {
-    const key = parentCommentId ? `fileReply-${parentCommentId}` : "fileComment";
-    const body = drafts[key]?.trim();
-    const lineNumber = Number(drafts.fileLineNumber);
-    const hasLineNumber = Number.isInteger(lineNumber) && lineNumber > 0;
-
-    if (!selectedProject || !selectedFile || !body) return;
-
-    runTask("fileComments", async () => {
-      await createRecord("fileComments", {
-        project_id: selectedProject.id,
-        file_id: selectedFile.id,
-        author_name: currentUser.trim() || defaultUserName,
-        body,
-        line_number: parentCommentId ? null : hasLineNumber ? lineNumber : null,
-        parent_comment_id: parentCommentId,
-        resolved: false,
-      });
-      setDraft(key, "");
-      if (!parentCommentId) setDraft("fileLineNumber", "");
-      await logActivity(
-        selectedProject.id,
-        `${selectedFile.original_name} 파일에 댓글이 작성되었습니다.`,
-        "file_comment",
-      );
+        chatMessages: [message, ...current.chatMessages],
+      };
     });
+  }, []);
+
+  async function handleDownloadVersion(project, version) {
+    const files = getFilesForVersion(data, version?.id);
+    await downloadVersion(project, version, files);
   }
 
-  function toggleFileComment(comment) {
-    if (!selectedProject || !selectedFile) return;
-
-    runTask(
-      "fileComments",
-      async () => {
-        await updateRecord("fileComments", comment.id, {
-          resolved: !comment.resolved,
-        });
-        await logActivity(
-          selectedProject.id,
-          `${selectedFile.original_name} 파일 댓글을 ${
-            comment.resolved ? "다시 열었습니다." : "해결 처리했습니다."
-          }`,
-          "file_comment_status",
-        );
-      },
-      comment.resolved ? "댓글을 다시 열었습니다." : "댓글을 해결 처리했습니다.",
+  if (!data) {
+    return (
+      <main className="loading-screen">
+        <Sparkles aria-hidden="true" />
+        <span>A&I 커뮤니티를 불러오는 중입니다.</span>
+      </main>
     );
   }
 
-  function addProjectFeedback(parentFeedbackId = null) {
-    const key = parentFeedbackId ? `feedbackReply-${parentFeedbackId}` : "projectFeedback";
-    const body = drafts[key]?.trim();
-    if (!selectedProject || !body) return;
+  const page = renderPage({
+    data,
+    detailTab,
+    isBusy,
+    navigate,
+    onCreateComment: handleCreateComment,
+    onCreateChatMessage: handleCreateChatMessage,
+    onCreateCommunityComment: handleCreateCommunityComment,
+    onCreateCommunityPost: handleCreateCommunityPost,
+    onCreateContent: handleCreateContent,
+    onCreateContentComment: handleCreateContentComment,
+    onCreateProject: handleCreateProject,
+    onCreateVersion: handleCreateVersion,
+    onDeleteContent: handleDeleteContent,
+    onDeleteCommunityPost: handleDeleteCommunityPost,
+    onDeleteProject: handleDeleteProject,
+    onDownloadVersion: handleDownloadVersion,
+    onEditProject: setEditingProject,
+    onIncomingChatMessage: handleIncomingChatMessage,
+    onSetDetailTab: setDetailTab,
+    onUpdateContent: handleUpdateContent,
+    onUpdateCommunityPost: handleUpdateCommunityPost,
+    route,
+  });
 
-    runTask("projectFeedback", async () => {
-      await createRecord("projectFeedback", {
-        project_id: selectedProject.id,
-        author_name: currentUser.trim() || defaultUserName,
-        feedback_type: parentFeedbackId ? "reply" : drafts.projectFeedbackType || "suggestion",
-        body,
-        parent_feedback_id: parentFeedbackId,
-      });
-      setDraft(key, "");
-      await logActivity(selectedProject.id, "프로젝트 피드백이 작성되었습니다.", "project_feedback");
-    });
+  return (
+    <AppShell
+      drawerOpen={drawerOpen}
+      navigate={navigate}
+      onCloseDrawer={() => setDrawerOpen(false)}
+      onOpenDrawer={() => setDrawerOpen(true)}
+      route={route}
+    >
+      {page}
+      {editingProject && (
+        <EditProjectDialog
+          isBusy={isBusy}
+          onClose={() => setEditingProject(null)}
+          onSubmit={(payload) => handleUpdateProject(editingProject.id, payload)}
+          project={editingProject}
+        />
+      )}
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+    </AppShell>
+  );
+}
+
+function renderPage(context) {
+  const { data, navigate, route } = context;
+  const [section, id, nested] = route.segments;
+
+  if (!section) {
+    return <HomePage data={data} navigate={navigate} />;
   }
 
-  function postUpdate() {
-    if (!selectedProject || !forms.update.title.trim()) return;
-
-    runTask("projectUpdates", async () => {
-      await createRecord("projectUpdates", {
-        project_id: selectedProject.id,
-        author_name: currentUser.trim() || defaultUserName,
-        title: forms.update.title.trim(),
-        body: forms.update.body.trim(),
-      });
-      await logActivity(selectedProject.id, `${forms.update.title} 업데이트가 게시되었습니다.`, "update");
-      resetForm("update", blankUpdate);
-    });
+  if (section === "projects" && id === "new") {
+    return <ProjectCreatePage isBusy={context.isBusy} onSubmit={context.onCreateProject} />;
   }
 
-  function sendMessage() {
-    const body = drafts.chat?.trim();
-    if (!selectedProject || !body) return;
-
-    runTask(
-      "chatMessages",
-      async () => {
-        await createRecord("chatMessages", {
-          project_id: selectedProject.id,
-          author_name: currentUser.trim() || defaultUserName,
-          body,
-        });
-        setDraft("chat", "");
-        await logActivity(selectedProject.id, "채팅 메시지가 작성되었습니다.", "chat_message");
-      },
-      "메시지가 저장되었습니다.",
+  if (section === "projects" && id) {
+    return (
+      <ProjectDetailPage
+        data={data}
+        detailTab={context.detailTab}
+        navigate={navigate}
+        onCreateComment={context.onCreateComment}
+        onCreateVersion={context.onCreateVersion}
+        onDeleteProject={context.onDeleteProject}
+        onDownloadVersion={context.onDownloadVersion}
+        onEditProject={context.onEditProject}
+        onSetDetailTab={context.onSetDetailTab}
+        projectId={id}
+      />
     );
   }
 
-  function createIdea() {
-    if (!forms.idea.title.trim()) return;
+  if (section === "projects") {
+    return <ProjectsPage data={data} navigate={navigate} />;
+  }
 
-    runTask(
-      "ideas",
-      async () => {
-        await createRecord("ideas", {
-          title: forms.idea.title.trim(),
-          category: forms.idea.category.trim() || "아이디어",
-          body: forms.idea.body.trim(),
-          author_name: currentUser.trim() || defaultUserName,
-          upvotes: 0,
-        });
-        resetForm("idea", blankIdea);
-      },
-      "아이디어가 저장되었습니다.",
+  if (contentCollections.includes(section) && id === "new") {
+    return (
+      <ContentFormPage
+        collection={section}
+        isBusy={context.isBusy}
+        mode="create"
+        navigate={navigate}
+        onSubmit={(payload) => context.onCreateContent(section, payload)}
+      />
     );
   }
 
-  function upvoteIdea(idea) {
-    runTask(
-      "ideas",
-      async () => {
-        await updateRecord("ideas", idea.id, {
-          upvotes: Number(idea.upvotes || 0) + 1,
-        });
-      },
-      "추천이 저장되었습니다.",
+  if (contentCollections.includes(section) && id && nested === "edit") {
+    return (
+      <ContentFormPage
+        collection={section}
+        data={data}
+        isBusy={context.isBusy}
+        mode="edit"
+        navigate={navigate}
+        onSubmit={(payload) => context.onUpdateContent(section, id, payload)}
+        postId={id}
+      />
     );
   }
 
-  function addIdeaComment(ideaId) {
-    const key = `idea-${ideaId}`;
-    const body = drafts[key]?.trim();
-    if (!body) return;
-
-    runTask("ideaComments", async () => {
-      await createRecord("ideaComments", {
-        idea_id: ideaId,
-        author_name: currentUser.trim() || defaultUserName,
-        body,
-      });
-      setDraft(key, "");
-    });
-  }
-
-  function publishShowcase() {
-    if (!forms.showcase.title.trim()) return;
-
-    runTask(
-      "showcases",
-      async () => {
-        const screenshot = await uploadShowcaseScreenshot(forms.showcase.screenshot);
-        await createRecord("showcases", {
-          project_id: forms.showcase.project_id || null,
-          title: forms.showcase.title.trim(),
-          description: forms.showcase.description.trim(),
-          demo_url: forms.showcase.demo_url.trim(),
-          likes: 0,
-          ...screenshot,
-        });
-        resetForm("showcase", blankShowcase);
-      },
-      "쇼케이스가 저장되었습니다.",
+  if (contentCollections.includes(section) && id) {
+    return (
+      <ContentDetailPage
+        collection={section}
+        data={data}
+        id={id}
+        navigate={navigate}
+        onCreateComment={(payload) => context.onCreateContentComment(section, id, payload)}
+        onDelete={() => context.onDeleteContent(section, id)}
+      />
     );
   }
 
-  function likeShowcase(showcase) {
-    runTask(
-      "showcases",
-      async () => {
-        await updateRecord("showcases", showcase.id, {
-          likes: Number(showcase.likes || 0) + 1,
-        });
-      },
-      "좋아요가 저장되었습니다.",
+  if (contentCollections.includes(section)) {
+    return <ContentListPage collection={section} data={data} navigate={navigate} />;
+  }
+
+  if (section === "search") {
+    return <SearchResultsPage data={data} navigate={navigate} query={route.query.get("q") || ""} />;
+  }
+
+  if (section === "community" && id === "new") {
+    return (
+      <CommunityPostFormPage
+        isBusy={context.isBusy}
+        mode="create"
+        navigate={navigate}
+        onSubmit={context.onCreateCommunityPost}
+      />
     );
   }
 
-  function addShowcaseFeedback(showcaseId) {
-    const key = `showcase-${showcaseId}`;
-    const body = drafts[key]?.trim();
-    if (!body) return;
-
-    runTask("showcaseFeedback", async () => {
-      await createRecord("showcaseFeedback", {
-        showcase_id: showcaseId,
-        author_name: currentUser.trim() || defaultUserName,
-        body,
-      });
-      setDraft(key, "");
-    });
+  if (section === "community" && id && nested === "edit") {
+    return (
+      <CommunityPostFormPage
+        data={data}
+        isBusy={context.isBusy}
+        mode="edit"
+        navigate={navigate}
+        onSubmit={(payload) => context.onUpdateCommunityPost(id, payload)}
+        postId={id}
+      />
+    );
   }
 
+  if (section === "community" && id) {
+    return (
+      <CommunityPostDetailPage
+        data={data}
+        navigate={navigate}
+        onCreateComment={context.onCreateCommunityComment}
+        onDeletePost={context.onDeleteCommunityPost}
+        postId={id}
+      />
+    );
+  }
+
+  if (section === "community") {
+    return <CommunityListPage data={data} navigate={navigate} />;
+  }
+
+  if (section === "chat") {
+    return (
+      <ChatPage
+        data={data}
+        isBusy={context.isBusy}
+        onIncomingMessage={context.onIncomingChatMessage}
+        onSendMessage={context.onCreateChatMessage}
+      />
+    );
+  }
+
+  return <EmptyState title="페이지를 찾을 수 없습니다" body="상단 메뉴에서 다시 이동해 주세요." />;
+}
+
+function AppShell({
+  children,
+  drawerOpen,
+  navigate,
+  onCloseDrawer,
+  onOpenDrawer,
+  route,
+}) {
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <button className="brand-button" onClick={goToProjects}>
-          <span className="brand-mark">A&I</span>
-          <span>
-            <strong>A&I</strong>
-            <small>AI 메이커 협업 OS</small>
-          </span>
-        </button>
-
-        <nav className="nav-list">
-          <button
-            className={view.startsWith("project") ? "nav-item active" : "nav-item"}
-            onClick={goToProjects}
-          >
-            <FileCode2 size={17} />
-            프로젝트
-          </button>
-          <button
-            className={view === "ideas" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              clearRoute();
-              setView("ideas");
-            }}
-          >
-            <Lightbulb size={17} />
-            아이디어
-          </button>
-          <button
-            className={view === "showcase" ? "nav-item active" : "nav-item"}
-            onClick={() => {
-              clearRoute();
-              setView("showcase");
-            }}
-          >
-            <GalleryHorizontalEnd size={17} />
-            쇼케이스
-          </button>
-        </nav>
-
-        <div className={notice.includes("Supabase schema") ? "status-card warning" : "status-card"}>
-          <p>저장 위치</p>
-          <strong>{isSupabaseReady ? "Supabase" : "localStorage"}</strong>
-          <span>{notice}</span>
-          <code>{lastSave}</code>
-        </div>
-      </aside>
-
-      <main className="workspace">
-        <header className="topbar">
-          <div>
-            <h1>{view === "project-detail" ? selectedProject?.title : "A&I Community"}</h1>
-          </div>
-          <label className="user-name-field">
-            <span>내 이름</span>
-            <input value={currentUser} onChange={(event) => setCurrentUser(event.target.value)} />
-          </label>
-        </header>
-
-        <section className="workspace-status">
-          {isSupabaseReady ? <Database size={16} /> : <HardDrive size={16} />}
-          <span>{dataSource === "supabase" ? "Supabase 실시간 저장" : "브라우저 localStorage 저장"}</span>
-          <strong>{lastSave}</strong>
-          <Radio size={16} />
-          <span>{presence.length ? uniquePresence(presence).map((user) => user.user_name).join(", ") : "접속자 없음"}</span>
-        </section>
-
-        {view === "projects" && renderProjectList()}
-        {view === "project-detail" && selectedProject && renderProjectDetail()}
-        {view === "ideas" && renderIdeas()}
-        {view === "showcase" && renderShowcase()}
-      </main>
+      <TopBar navigate={navigate} onOpenDrawer={onOpenDrawer} route={route} />
+      <SlideMenuDrawer
+        navigate={navigate}
+        onClose={onCloseDrawer}
+        open={drawerOpen}
+        pathname={route.pathname}
+      />
+      <main className="app-main">{children}</main>
     </div>
   );
+}
 
-  function renderProjectList() {
-    return (
-      <div className="page-grid">
-        <section className="panel create-panel">
-          <PanelTitle title="프로젝트 등록" eyebrow="새 작업실" />
-          <div className="form-stack">
-            <input
-              placeholder="프로젝트 이름"
-              value={forms.project.title}
-              onChange={(event) => updateForm("project", "title", event.target.value)}
-            />
-            <input
-              placeholder="카테고리 예: 웹앱, 게임, 디자인"
-              value={forms.project.category}
-              onChange={(event) => updateForm("project", "category", event.target.value)}
-            />
-            <textarea
-              rows="5"
-              placeholder="무엇을 만들었고 어떤 협업이 필요한지 적어주세요."
-              value={forms.project.description}
-              onChange={(event) => updateForm("project", "description", event.target.value)}
-            />
-            <input
-              placeholder="협업자 예: Mina, Joon"
-              value={forms.project.collaborators}
-              onChange={(event) => updateForm("project", "collaborators", event.target.value)}
-            />
-            <input
-              placeholder="태그 예: React, AI, 학생"
-              value={forms.project.tags}
-              onChange={(event) => updateForm("project", "tags", event.target.value)}
-            />
-            <select
-              value={forms.project.visibility}
-              onChange={(event) => updateForm("project", "visibility", event.target.value)}
-            >
-              <option value="public">공개 프로젝트</option>
-              <option value="private">비공개 프로젝트</option>
-            </select>
-            <button className="primary-action" disabled={isBusy || !forms.project.title.trim()} onClick={createProject}>
-              <Plus size={16} />
-              프로젝트 저장
-            </button>
-          </div>
-        </section>
+function TopBar({ navigate, onOpenDrawer, route }) {
+  return (
+    <header className="topbar">
+      <button className="icon-button" type="button" onClick={onOpenDrawer} aria-label="메뉴 열기">
+        <Menu size={20} />
+      </button>
+      <LogoBlock onClick={() => navigate("/")} />
+      <SearchBar navigate={navigate} query={route.query.get("q") || ""} />
+      <button className="primary-button topbar-cta" type="button" onClick={() => navigate("/projects/new")}>
+        <Plus size={17} />
+        새 프로젝트 등록
+      </button>
+    </header>
+  );
+}
 
-        <section className="panel list-panel">
-          <div className="list-header">
-            <PanelTitle title="프로젝트" eyebrow={`${data.projects.length}개`} />
-            <div className="category-tabs">
-              {categories.map((category) => (
-                <button
-                  className={categoryFilter === category ? "active" : ""}
-                  key={category}
-                  onClick={() => setCategoryFilter(category)}
-                >
-                  {category}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="project-card-grid">
-            {visibleProjects.map((project) => {
-              const files = data.projectFiles.filter((file) => file.project_id === project.id);
-              const feedbackCount = data.projectFeedback.filter((feedback) => feedback.project_id === project.id).length;
-              const fileCommentCount = data.fileComments.filter((comment) => comment.project_id === project.id).length;
-
-              return (
-                <article className="project-card" key={project.id}>
-                  <div className="project-card-top">
-                    <span>{project.category}</span>
-                    <small>{project.visibility === "private" ? "비공개" : "공개"}</small>
-                  </div>
-                  <strong>{project.title}</strong>
-                  <p>{project.description || "아직 설명이 없습니다."}</p>
-                  <TagList items={project.tags || []} />
-                  <div className="card-meta">
-                    <small>{files.length} 파일</small>
-                    <small>{feedbackCount + fileCommentCount} 댓글</small>
-                    <small>{project.download_count || 0} 다운로드</small>
-                    <small>{project.fork_count || 0} 포크</small>
-                  </div>
-                  <button onClick={() => openProject(project.id)}>작업실 열기</button>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      </div>
-    );
-  }
-
-  function renderProjectDetail() {
-    const originalProject = selectedProject.original_project_id
-      ? data.projects.find((project) => project.id === selectedProject.original_project_id)
-      : null;
-
-    return (
-      <section className="detail-page">
-        <div className="detail-header">
-          <button className="ghost-button" onClick={goToProjects}>
-            <ArrowLeft size={16} />
-            목록
-          </button>
-
-          <div>
-            <div className="detail-kicker">
-              <span>{selectedProject.category}</span>
-              <span>{selectedProject.visibility === "private" ? "비공개" : "공개"}</span>
-              {originalProject && <span>{originalProject.title}에서 포크됨</span>}
-            </div>
-            <h2>{selectedProject.title}</h2>
-            <p>{selectedProject.description || "프로젝트 설명이 없습니다."}</p>
-            <TagList items={selectedProject.tags || []} />
-            <div className="owner-row">
-              <span>Creator: {selectedProject.owner_name || defaultUserName}</span>
-              <span>Collaborators: {(selectedProject.collaborators || []).join(", ") || "없음"}</span>
-            </div>
-          </div>
-
-          <div className="project-actions">
-            <button className="secondary-action" onClick={downloadProjectZip}>
-              <Download size={16} />
-              프로젝트 ZIP
-            </button>
-            <button className="secondary-action" onClick={likeProject}>
-              <Heart size={16} />
-              {selectedProject.likes || 0}
-            </button>
-            <button className="secondary-action" onClick={forkProject}>
-              <GitFork size={16} />
-              포크
-            </button>
-            <button className="secondary-action" onClick={startEditProject}>
-              <Edit3 size={16} />
-              수정
-            </button>
-            <button className="danger-action" onClick={deleteProject}>
-              <Trash2 size={16} />
-              삭제
-            </button>
-          </div>
-
-          <PresenceStrip title="작업실 접속자" users={projectPresence} />
-        </div>
-
-        {projectEditOpen && renderProjectEditPanel()}
-
-        <div className="detail-tabs">
-          {projectTabs.map((tab) => {
-            const Icon = tab.icon;
+function SlideMenuDrawer({ navigate, onClose, open, pathname }) {
+  return (
+    <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}>
+      <button className="drawer-backdrop" type="button" onClick={onClose} aria-label="메뉴 닫기" />
+      <aside className="drawer-panel" aria-label="주 메뉴">
+        <nav>
+          {topLevelMenuItems.map((item) => {
+            const Icon = item.icon;
+            const active =
+              item.path === "/" ? pathname === "/" : pathname === item.path || pathname.startsWith(`${item.path}/`);
             return (
               <button
-                className={projectTab === tab.id ? "active" : ""}
-                key={tab.id}
-                onClick={() => setProjectTab(tab.id)}
+                className={active ? "active" : ""}
+                key={item.path}
+                type="button"
+                onClick={() => navigate(item.path)}
               >
-                <Icon size={15} />
-                {tab.label}
+                <Icon size={18} />
+                {item.label}
               </button>
             );
           })}
-        </div>
+        </nav>
+      </aside>
+    </div>
+  );
+}
 
-        {projectTab === "files" && renderFilesTab()}
-        {projectTab === "feedback" && renderProjectFeedbackTab()}
-        {projectTab === "updates" && renderUpdatesTab()}
-        {projectTab === "chat" && renderChatTab()}
-        {projectTab === "activity" && renderActivityTab()}
-      </section>
-    );
+function SearchBar({ navigate, query }) {
+  const [value, setValue] = useState(query);
+
+  useEffect(() => {
+    setValue(query);
+  }, [query]);
+
+  function submit(event) {
+    event.preventDefault();
+    const nextQuery = value.trim();
+    navigate(nextQuery ? `/search?q=${encodeURIComponent(nextQuery)}` : "/search");
   }
 
-  function renderProjectEditPanel() {
-    return (
-      <section className="panel edit-panel">
-        <div className="panel-row-header">
-          <PanelTitle title="프로젝트 정보 수정" eyebrow="Metadata" />
-          <button className="icon-action" onClick={() => setProjectEditOpen(false)}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="edit-grid">
-          <input
-            placeholder="프로젝트 이름"
-            value={forms.projectEdit.title}
-            onChange={(event) => updateForm("projectEdit", "title", event.target.value)}
-          />
-          <input
-            placeholder="카테고리"
-            value={forms.projectEdit.category}
-            onChange={(event) => updateForm("projectEdit", "category", event.target.value)}
-          />
-          <input
-            placeholder="협업자"
-            value={forms.projectEdit.collaborators}
-            onChange={(event) => updateForm("projectEdit", "collaborators", event.target.value)}
-          />
-          <input
-            placeholder="태그"
-            value={forms.projectEdit.tags}
-            onChange={(event) => updateForm("projectEdit", "tags", event.target.value)}
-          />
-          <select
-            value={forms.projectEdit.visibility}
-            onChange={(event) => updateForm("projectEdit", "visibility", event.target.value)}
-          >
-            <option value="public">공개 프로젝트</option>
-            <option value="private">비공개 프로젝트</option>
-          </select>
-          <textarea
-            rows="3"
-            placeholder="프로젝트 설명"
-            value={forms.projectEdit.description}
-            onChange={(event) => updateForm("projectEdit", "description", event.target.value)}
-          />
-        </div>
-        <button className="primary-action" onClick={saveProjectEdit}>
-          <Save size={16} />
-          저장
-        </button>
-      </section>
-    );
-  }
+  return (
+    <form className="search-bar" role="search" onSubmit={submit}>
+      <Search size={17} />
+      <input
+        aria-label="프로젝트, 아이디어, 인사이트 검색"
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="프로젝트, 아이디어, 인사이트 검색"
+        value={value}
+      />
+    </form>
+  );
+}
 
-  function renderFilesTab() {
-    const fileComments = data.fileComments
-      .filter((comment) => comment.file_id === selectedFile?.id)
-      .sort((a, b) => {
-        const lineDiff = Number(a.line_number || 999999) - Number(b.line_number || 999999);
-        if (lineDiff !== 0) return lineDiff;
-        return new Date(a.created_at || 0) - new Date(b.created_at || 0);
-      });
-    const openCommentCount = fileComments.filter((comment) => !comment.resolved && !comment.parent_comment_id).length;
-    const versions = selectedFile
-      ? projectFiles
-          .filter((file) => file.version_group === selectedFile.version_group)
-          .sort((a, b) => Number(a.version_number || 0) - Number(b.version_number || 0))
-      : [];
-
-    return (
-      <div className="drive-workspace">
-        <section className="panel file-control-panel">
-          <PanelTitle title="업로드" eyebrow="Project Files" />
-          <label className="upload-button">
-            <UploadCloud size={18} />
-            파일 여러 개 업로드
-            <input
-              multiple
-              type="file"
-              onChange={(event) => {
-                if (event.target.files?.length) uploadFiles(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
-          <label className="upload-button secondary-upload">
-            <FolderOpen size={18} />
-            프로젝트 폴더 업로드
-            <input
-              directory=""
-              multiple
-              type="file"
-              webkitdirectory=""
-              onChange={(event) => {
-                if (event.target.files?.length) uploadFiles(event.target.files);
-                event.target.value = "";
-              }}
-            />
-          </label>
-
-          <div className="folder-create">
-            <input
-              placeholder="새 폴더 이름"
-              value={forms.folder.name}
-              onChange={(event) => updateForm("folder", "name", event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") createFolder();
-              }}
-            />
-            <button onClick={createFolder}>
-              <FolderPlus size={16} />
-            </button>
-          </div>
-
-          <div className="link-form">
-            <input
-              placeholder="링크 이름"
-              value={forms.link.title}
-              onChange={(event) => updateForm("link", "title", event.target.value)}
-            />
-            <input
-              placeholder="https://"
-              value={forms.link.url}
-              onChange={(event) => updateForm("link", "url", event.target.value)}
-            />
-            <button disabled={!forms.link.title.trim() || !forms.link.url.trim()} onClick={addLink}>
-              <LinkIcon size={16} />
-              링크 저장
-            </button>
-          </div>
-        </section>
-
-        <section className="panel browser-panel">
-          <div className="panel-row-header">
-            <PanelTitle title="폴더 구조" eyebrow={currentFolder || "Root"} />
-            <button className="secondary-action" onClick={downloadProjectZip}>
-              <Download size={16} />
-              ZIP
-            </button>
-          </div>
-          <Breadcrumb path={currentFolder} onMove={setCurrentFolder} />
-
-          <div className="folder-grid">
-            {currentFolders.map((folder) => (
-              <button className="folder-tile" key={folder.path} onClick={() => setCurrentFolder(folder.path)}>
-                <Folder size={17} />
-                <span>{folder.name}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="file-list">
-            {currentFiles.map((file) => {
-              const totalComments = data.fileComments.filter((comment) => comment.file_id === file.id).length;
-              const unresolvedComments = data.fileComments.filter(
-                (comment) => comment.file_id === file.id && !comment.resolved && !comment.parent_comment_id,
-              ).length;
-              const Icon = iconForFile(file);
-
-              return (
-                <button
-                  className={selectedFile?.id === file.id ? "active" : ""}
-                  key={file.id}
-                  onClick={() => {
-                    setSelectedFileId(file.id);
-                    setDraft("fileLineNumber", "");
-                  }}
-                >
-                  <Icon size={16} />
-                  <span>
-                    <strong>{file.original_name}</strong>
-                    <small>
-                      {resourceLabel(file)} · 댓글 {totalComments}
-                      {unresolvedComments ? ` · 미해결 ${unresolvedComments}` : ""} · 다운로드 {file.download_count || 0}
-                    </small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="panel file-preview-panel">
-          <div className="file-panel-header">
-            <PanelTitle
-              title={selectedFile?.original_name || "파일 미리보기"}
-              eyebrow={selectedFile ? `${openCommentCount}개 미해결 댓글` : "선택 필요"}
-            />
-            {selectedFile && (
-              <div className="file-actions">
-                <button className="secondary-action" onClick={copyFileShareLink}>
-                  <Share2 size={16} />
-                  공유
-                </button>
-                <button className="secondary-action" onClick={() => downloadFile(selectedFile)}>
-                  <Download size={16} />
-                  다운로드
-                </button>
-                <button className="secondary-action" onClick={() => setFileEditOpen((value) => !value)}>
-                  <Edit3 size={16} />
-                  정리
-                </button>
-                <button className="danger-action" onClick={deleteFile}>
-                  <Trash2 size={16} />
-                  삭제
-                </button>
-              </div>
-            )}
-          </div>
-
-          {selectedFile && (
-            <div className="file-context-row">
-              <span>{joinPath(selectedFile.folder_path || "", selectedFile.original_name)}</span>
-              <span>{formatBytes(selectedFile.size_bytes)}</span>
-              <span>{selectedFile.created_by || defaultUserName}</span>
-              <span>{formatDate(selectedFile.created_at)}</span>
-            </div>
-          )}
-
-          <PresenceStrip title="이 파일을 보는 사람" users={filePresence} compact />
-
-          {selectedFile && fileEditOpen && (
-            <div className="file-edit-box">
-              <input
-                placeholder="파일 이름"
-                value={forms.fileEdit.original_name}
-                onChange={(event) => updateForm("fileEdit", "original_name", event.target.value)}
-              />
-              <input
-                placeholder="폴더 경로 예: src/components"
-                value={forms.fileEdit.folder_path}
-                onChange={(event) => updateForm("fileEdit", "folder_path", event.target.value)}
-              />
-              <button className="primary-action" onClick={saveFileEdit}>
-                <Save size={16} />
-                저장
-              </button>
-            </div>
-          )}
-
-          {!selectedFile && <div className="empty-state">파일을 업로드하거나 선택하세요.</div>}
-          {selectedFile?.resource_type === "image" && <img className="preview-image" src={filePreview} alt="" />}
-          {selectedFile?.resource_type === "link" && (
-            <a className="big-link" href={filePreview} target="_blank" rel="noreferrer">
-              {filePreview}
-            </a>
-          )}
-          {selectedFile && isPreviewableTextFile(selectedFile) && (
-            <CodePreview
-              content={filePreview}
-              fileName={selectedFile.original_name}
-              onLineClick={(lineNumber) => setDraft("fileLineNumber", String(lineNumber))}
-              selectedLine={Number(drafts.fileLineNumber)}
-            />
-          )}
-          {selectedFile &&
-            selectedFile.resource_type !== "image" &&
-            selectedFile.resource_type !== "link" &&
-            !isPreviewableTextFile(selectedFile) && (
-              <div className="unsupported-preview">
-                <FileArchive size={26} />
-                <strong>This file preview is not supported. Download to view.</strong>
-                <button className="primary-action" onClick={() => downloadFile(selectedFile)}>
-                  <Download size={16} />
-                  파일 다운로드
-                </button>
-              </div>
-            )}
-
-          {selectedFile && versions.length > 0 && (
-            <div className="version-row">
-              <span>버전</span>
-              {versions.map((file) => (
-                <button
-                  className={selectedFile.id === file.id ? "active" : ""}
-                  key={file.id}
-                  onClick={() => setSelectedFileId(file.id)}
-                >
-                  v{file.version_number}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {selectedFile && (
-            <>
-              <div className="file-comment-composer">
-                <input
-                  inputMode="numeric"
-                  min="1"
-                  placeholder="줄 번호"
-                  type="number"
-                  value={drafts.fileLineNumber || ""}
-                  onChange={(event) => setDraft("fileLineNumber", event.target.value)}
-                />
-                <CommentComposer
-                  buttonLabel="파일 댓글 저장"
-                  value={drafts.fileComment || ""}
-                  onChange={(value) => setDraft("fileComment", value)}
-                  onSubmit={() => addFileComment()}
-                  placeholder="이 파일에 남길 피드백을 입력하세요."
-                />
-              </div>
-              <FileCommentList
-                comments={fileComments}
-                drafts={drafts}
-                onReply={addFileComment}
-                onReplyChange={setDraft}
-                onToggle={toggleFileComment}
-              />
-            </>
-          )}
-        </section>
-      </div>
-    );
-  }
-
-  function renderProjectFeedbackTab() {
-    const feedback = data.projectFeedback
-      .filter((item) => item.project_id === selectedProject.id)
-      .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
-
-    return (
-      <section className="panel narrow-panel">
-        <PanelTitle title="프로젝트 피드백" eyebrow={`${feedback.length}개`} />
-        <div className="feedback-composer">
-          <select
-            value={drafts.projectFeedbackType}
-            onChange={(event) => setDraft("projectFeedbackType", event.target.value)}
-          >
-            <option value="review">리뷰</option>
-            <option value="suggestion">제안</option>
-            <option value="discussion">토론</option>
-          </select>
-          <CommentComposer
-            buttonLabel="피드백 저장"
-            value={drafts.projectFeedback || ""}
-            onChange={(value) => setDraft("projectFeedback", value)}
-            onSubmit={() => addProjectFeedback()}
-            placeholder="테스트한 느낌, 개선 제안, 질문을 남겨주세요."
-          />
-        </div>
-        <ProjectFeedbackList
-          drafts={drafts}
-          feedback={feedback}
-          onReply={addProjectFeedback}
-          onReplyChange={setDraft}
+function HomePage({ data, navigate }) {
+  return (
+    <div className="page-stack">
+      <HeroSection navigate={navigate} />
+      <section className="content-section">
+        <SectionHeading
+          title="최신 빌더 소식"
+          description="프로젝트, 아이디어, 커뮤니티, 인사이트, 공지사항을 한 흐름으로 모았습니다."
         />
+        <MixedFeedList data={data} navigate={navigate} />
       </section>
-    );
-  }
+    </div>
+  );
+}
 
-  function renderUpdatesTab() {
-    const updates = data.projectUpdates.filter((update) => update.project_id === selectedProject.id);
-
-    return (
-      <section className="panel narrow-panel">
-        <PanelTitle title="프로젝트 업데이트" eyebrow={`${updates.length}개`} />
-        <div className="form-stack">
-          <input
-            placeholder="업데이트 제목"
-            value={forms.update.title}
-            onChange={(event) => updateForm("update", "title", event.target.value)}
-          />
-          <textarea
-            rows="4"
-            placeholder="오늘 바뀐 내용이나 다음 할 일을 적어주세요."
-            value={forms.update.body}
-            onChange={(event) => updateForm("update", "body", event.target.value)}
-          />
-          <button className="primary-action" disabled={!forms.update.title.trim()} onClick={postUpdate}>
-            업데이트 저장
+function HeroSection({ navigate }) {
+  return (
+    <section className="hero-section">
+      <div className="hero-copy">
+        <h1>AI and I, idea to the world</h1>
+        <p>AI와 함께, 아이디어를 현실로</p>
+        <div className="hero-actions">
+          <button className="primary-button" type="button" onClick={() => navigate("/projects/new")}>
+            <Plus size={17} />
+            프로젝트 등록
+          </button>
+          <button className="secondary-button" type="button" onClick={() => navigate("/ideas")}>
+            아이디어 둘러보기
           </button>
         </div>
-        <FeedList items={updates} />
-      </section>
-    );
-  }
-
-  function renderChatTab() {
-    const messages = data.chatMessages.filter((message) => message.project_id === selectedProject.id);
-
-    return (
-      <section className="panel narrow-panel chat-panel">
-        <PanelTitle title="프로젝트 채팅" eyebrow={`${messages.length}개`} />
-        <div className="chat-list">
-          {messages.map((message) => (
-            <article key={message.id}>
-              <strong>{message.author_name}</strong>
-              <p>{message.body}</p>
-              <small>{formatDate(message.created_at)}</small>
-            </article>
-          ))}
-        </div>
-        <div className="chat-composer">
-          <input
-            placeholder="메시지 입력"
-            value={drafts.chat || ""}
-            onChange={(event) => setDraft("chat", event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") sendMessage();
-            }}
-          />
-          <button disabled={!drafts.chat?.trim()} onClick={sendMessage}>
-            <Send size={16} />
-            저장
-          </button>
-        </div>
-      </section>
-    );
-  }
-
-  function renderActivityTab() {
-    const logs = data.activityLogs
-      .filter((log) => log.project_id === selectedProject.id)
-      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-
-    return (
-      <section className="panel narrow-panel">
-        <PanelTitle title="활동 타임라인" eyebrow={`${logs.length}개`} />
-        <Timeline items={logs} />
-      </section>
-    );
-  }
-
-  function renderIdeas() {
-    return (
-      <div className="page-grid">
-        <section className="panel create-panel">
-          <PanelTitle title="아이디어 올리기" eyebrow="Idea Base" />
-          <div className="form-stack">
-            <input
-              placeholder="아이디어 제목"
-              value={forms.idea.title}
-              onChange={(event) => updateForm("idea", "title", event.target.value)}
-            />
-            <input
-              placeholder="카테고리"
-              value={forms.idea.category}
-              onChange={(event) => updateForm("idea", "category", event.target.value)}
-            />
-            <textarea
-              rows="5"
-              placeholder="어떤 문제를 해결하고 싶나요?"
-              value={forms.idea.body}
-              onChange={(event) => updateForm("idea", "body", event.target.value)}
-            />
-            <button className="primary-action" disabled={!forms.idea.title.trim()} onClick={createIdea}>
-              아이디어 저장
-            </button>
-          </div>
-        </section>
-
-        <section className="idea-grid">
-          {data.ideas.map((idea) => {
-            const comments = data.ideaComments.filter((comment) => comment.idea_id === idea.id);
-            const draftKey = `idea-${idea.id}`;
-
-            return (
-              <article className="panel idea-card" key={idea.id}>
-                <span>{idea.category}</span>
-                <strong>{idea.title}</strong>
-                <p>{idea.body}</p>
-                <button className="ghost-button" onClick={() => upvoteIdea(idea)}>
-                  <Heart size={16} />
-                  {idea.upvotes || 0} 추천
-                </button>
-                <CommentComposer
-                  buttonLabel="의견 저장"
-                  value={drafts[draftKey] || ""}
-                  onChange={(value) => setDraft(draftKey, value)}
-                  onSubmit={() => addIdeaComment(idea.id)}
-                  placeholder="아이디어에 대한 의견을 남겨주세요."
-                />
-                <CommentList comments={comments} />
-              </article>
-            );
-          })}
-        </section>
       </div>
-    );
-  }
-
-  function renderShowcase() {
-    return (
-      <div className="page-grid">
-        <section className="panel create-panel">
-          <PanelTitle title="완성작 공개" eyebrow="Showcase" />
-          <div className="form-stack">
-            <select
-              value={forms.showcase.project_id}
-              onChange={(event) => updateForm("showcase", "project_id", event.target.value)}
-            >
-              <option value="">프로젝트 선택 안 함</option>
-              {data.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.title}
-                </option>
-              ))}
-            </select>
-            <input
-              placeholder="쇼케이스 제목"
-              value={forms.showcase.title}
-              onChange={(event) => updateForm("showcase", "title", event.target.value)}
-            />
-            <input
-              placeholder="데모 링크"
-              value={forms.showcase.demo_url}
-              onChange={(event) => updateForm("showcase", "demo_url", event.target.value)}
-            />
-            <textarea
-              rows="4"
-              placeholder="완성작을 소개해주세요."
-              value={forms.showcase.description}
-              onChange={(event) => updateForm("showcase", "description", event.target.value)}
-            />
-            <input
-              accept="image/*"
-              type="file"
-              onChange={(event) =>
-                updateForm("showcase", "screenshot", event.target.files?.[0] || null)
-              }
-            />
-            <button className="primary-action" disabled={!forms.showcase.title.trim()} onClick={publishShowcase}>
-              쇼케이스 저장
-            </button>
-          </div>
-        </section>
-
-        <section className="showcase-grid">
-          {data.showcases.map((showcase) => {
-            const feedback = data.showcaseFeedback.filter(
-              (comment) => comment.showcase_id === showcase.id,
-            );
-            const draftKey = `showcase-${showcase.id}`;
-
-            return (
-              <article className="panel showcase-card" key={showcase.id}>
-                {showcase.screenshot_url && (
-                  <img src={showcase.screenshot_url} alt={`${showcase.title} screenshot`} />
-                )}
-                <div>
-                  <strong>{showcase.title}</strong>
-                  <p>{showcase.description}</p>
-                  <div className="card-actions">
-                    <button onClick={() => likeShowcase(showcase)}>
-                      {showcase.likes || 0} 좋아요
-                    </button>
-                    {showcase.demo_url && (
-                      <a href={showcase.demo_url} target="_blank" rel="noreferrer">
-                        데모 열기
-                      </a>
-                    )}
-                  </div>
-                  <CommentComposer
-                    buttonLabel="피드백 저장"
-                    value={drafts[draftKey] || ""}
-                    onChange={(value) => setDraft(draftKey, value)}
-                    onSubmit={() => addShowcaseFeedback(showcase.id)}
-                    placeholder="쇼케이스에 대한 피드백을 남겨주세요."
-                  />
-                  <CommentList comments={feedback} />
-                </div>
-              </article>
-            );
-          })}
-        </section>
+      <div className="hero-visual" aria-label="A&I builder community visual">
+        <img src={heroBuilderImage} alt="" />
       </div>
-    );
-  }
-}
-
-function PanelTitle({ eyebrow, title }) {
-  return (
-    <div className="panel-title">
-      <p>{eyebrow}</p>
-      <h2>{title}</h2>
-    </div>
+    </section>
   );
 }
 
-function PresenceStrip({ compact = false, title, users }) {
-  return (
-    <div className={compact ? "presence-strip compact" : "presence-strip"}>
-      <span>
-        <Users size={15} />
-        {title}
-      </span>
-      <div>
-        {users.length ? (
-          users.map((user) => (
-            <strong key={`${user.user_name}-${user.presence_ref || user.file_id || user.project_id || ""}`}>
-              {user.user_name}
-            </strong>
-          ))
-        ) : (
-          <em>없음</em>
-        )}
-      </div>
-    </div>
-  );
-}
+function MixedFeedList({ data, navigate }) {
+  const feed = useMemo(() => buildMixedFeed(data).slice(0, 12), [data]);
 
-function Breadcrumb({ onMove, path }) {
-  const parts = path ? path.split("/") : [];
+  if (!feed.length) {
+    return <EmptyState title="아직 새 소식이 없습니다" body="첫 프로젝트를 등록하고 빌더 루프를 시작해 보세요." />;
+  }
 
   return (
-    <div className="breadcrumb">
-      <button onClick={() => onMove("")}>Root</button>
-      {parts.map((part, index) => {
-        const nextPath = parts.slice(0, index + 1).join("/");
-        return (
-          <span key={nextPath}>
-            <ChevronRight size={14} />
-            <button onClick={() => onMove(nextPath)}>{part}</button>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function TagList({ items }) {
-  if (!items?.length) return null;
-
-  return (
-    <div className="tag-list">
-      {items.map((tag) => (
-        <span key={tag}>{tag}</span>
+    <div className="feed-list">
+      {feed.map((item) => (
+        <FeedItemRow item={item} key={item.key} navigate={navigate} />
       ))}
     </div>
   );
 }
 
-function CodePreview({ content, fileName, onLineClick, selectedLine }) {
-  const lines = content.split("\n");
-  const language = getFileExtension(fileName);
+function FeedItemRow({ item, navigate }) {
+  return (
+    <button className="feed-row" type="button" onClick={() => navigate(item.path)}>
+      <span className={`type-dot ${item.type}`} />
+      <span className="feed-main">
+        <strong>{item.title}</strong>
+        <small>
+          <Badge>{item.badge}</Badge>
+          {item.author}
+          <span aria-hidden="true">·</span>
+          <RelativeTimeText value={item.time} />
+          {typeof item.commentCount === "number" && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>댓글 {item.commentCount}</span>
+            </>
+          )}
+          {item.sourceUrl && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>출처 있음</span>
+            </>
+          )}
+        </small>
+        {item.excerpt && <em>{item.excerpt}</em>}
+      </span>
+      <ChevronRight size={17} />
+    </button>
+  );
+}
+
+function ProjectsPage({ data, navigate }) {
+  const [activeCategory, setActiveCategory] = useState("All");
+  const projects = useMemo(() => {
+    const sorted = sortByRecent(data.projects);
+    if (activeCategory === "All") return sorted;
+    return sorted.filter((project) => project.category === activeCategory);
+  }, [activeCategory, data.projects]);
 
   return (
-    <div className="code-preview">
-      {lines.map((line, index) => {
-        const lineNumber = index + 1;
-        return (
-          <button
-            className={selectedLine === lineNumber ? "code-line selected" : "code-line"}
-            key={`${lineNumber}-${line}`}
-            onClick={() => onLineClick(lineNumber)}
-          >
-            <span>{lineNumber}</span>
-            <code>{highlightLine(line || " ", language)}</code>
+    <div className="page-stack">
+      <PageHeader
+        action={
+          <button className="primary-button" type="button" onClick={() => navigate("/projects/new")}>
+            <Plus size={17} />
+            새 프로젝트 등록
           </button>
-        );
-      })}
+        }
+        description="다운로드하고 실행해 보고 피드백을 남기는 프로젝트 발견 공간입니다."
+        title="프로젝트"
+      />
+      <ProjectTabs active={activeCategory} onChange={setActiveCategory} />
+      <ProjectList data={data} navigate={navigate} projects={projects} />
     </div>
   );
 }
 
-function CommentComposer({ buttonLabel, onChange, onSubmit, placeholder = "댓글을 입력하세요.", value }) {
+function ProjectTabs({ active, onChange }) {
   return (
-    <div className="comment-composer">
-      <textarea
-        rows="3"
+    <div className="category-tabs" role="tablist" aria-label="프로젝트 카테고리">
+      {categoryTabs.map((category) => (
+        <button
+          aria-selected={active === category}
+          className={active === category ? "active" : ""}
+          key={category}
+          type="button"
+          onClick={() => onChange(category)}
+        >
+          {category}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ProjectList({ data, navigate, projects }) {
+  if (!projects.length) {
+    return <EmptyState title="조건에 맞는 프로젝트가 없습니다" body="다른 카테고리를 선택하거나 새 프로젝트를 등록해 보세요." />;
+  }
+
+  return (
+    <div className="project-list">
+      {projects.map((project) => (
+        <ProjectCard data={data} key={project.id} navigate={navigate} project={project} />
+      ))}
+    </div>
+  );
+}
+
+function ProjectCard({ data, navigate, project }) {
+  const versions = getVersionsForProject(data, project.id);
+  const files = versions.flatMap((version) => getFilesForVersion(data, version.id));
+  const commentCount = getProjectComments(data, project.id).length;
+
+  return (
+    <article className="project-card">
+      <button
+        className="thumbnail-button"
+        type="button"
+        onClick={() => navigate(`/projects/${project.id}`)}
+        aria-label={`${project.title} 상세 보기`}
+      >
+        <img
+          alt=""
+          className={project.thumbnail_url ? "thumbnail-image" : "thumbnail-image thumbnail-image--fallback"}
+          src={project.thumbnail_url || defaultProjectThumbnail}
+        />
+      </button>
+      <div className="project-card-body">
+        <div className="project-title-line">
+          <button type="button" onClick={() => navigate(`/projects/${project.id}`)}>
+            {project.title}
+          </button>
+          <Badge>{project.category}</Badge>
+        </div>
+        <p>{project.description}</p>
+        <div className="meta-row">
+          <span>{project.builder_name}</span>
+          <span>댓글 {commentCount}</span>
+          <RelativeTimeText value={project.updated_at || project.created_at} />
+          {project.demo_url && <Badge tone="sky">데모 있음</Badge>}
+          {files.length > 0 && <Badge tone="mint">파일 첨부</Badge>}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ProjectCreatePage({ isBusy, onSubmit }) {
+  return (
+    <div className="narrow-page">
+      <PageHeader
+        description="파일이 있다면 첫 버전 정보까지 함께 남겨 주세요."
+        title="새 프로젝트 등록"
+      />
+      <ProjectForm isBusy={isBusy} onSubmit={onSubmit} />
+    </div>
+  );
+}
+
+function ProjectForm({ isBusy, onSubmit }) {
+  const [form, setForm] = useState({
+    title: "",
+    builder_name: "",
+    description: "",
+    category: "Web",
+    thumbnailFile: null,
+    thumbnailPreview: "",
+    demo_url: "",
+    github_url: "",
+    files: [],
+    version_label: "",
+    change_summary: "",
+  });
+
+  const filesNeedVersion = form.files.length > 0;
+  const versionReady = !filesNeedVersion || (form.version_label.trim() && form.change_summary.trim());
+  const isReady =
+    form.title.trim() &&
+    form.builder_name.trim() &&
+    form.description.trim() &&
+    versionReady &&
+    !isBusy;
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function handleThumbnail(file) {
+    if (!file) return;
+    update("thumbnailFile", file);
+    update("thumbnailPreview", URL.createObjectURL(file));
+  }
+
+  function handleFiles(fileList) {
+    update("files", Array.from(fileList || []));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    if (!isReady) return;
+    onSubmit(form);
+  }
+
+  return (
+    <form className="project-form" onSubmit={submit}>
+      <label className="field thumbnail-field">
+        <span>썸네일</span>
+        <img
+          alt="프로젝트 썸네일 미리보기"
+          className={form.thumbnailPreview ? "thumbnail-image" : "thumbnail-image thumbnail-image--fallback"}
+          src={form.thumbnailPreview || defaultProjectThumbnail}
+        />
+        <input accept="image/*" type="file" onChange={(event) => handleThumbnail(event.target.files?.[0])} />
+        <small>업로드하지 않으면 A&I 기본 썸네일을 사용합니다.</small>
+      </label>
+
+      <div className="form-grid">
+        <TextField label="프로젝트 이름" value={form.title} onChange={(value) => update("title", value)} />
+        <TextField label="빌더 이름" value={form.builder_name} onChange={(value) => update("builder_name", value)} />
+        <label className="field">
+          <span>카테고리</span>
+          <select value={form.category} onChange={(event) => update("category", event.target.value)}>
+            {categoryTabs.slice(1).map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field span-2">
+          <span>설명</span>
+          <textarea
+            rows="5"
+            value={form.description}
+            onChange={(event) => update("description", event.target.value)}
+            placeholder="무엇을 만들었고, 다른 빌더가 어떻게 실행하면 되는지 적어 주세요."
+          />
+        </label>
+        <TextField label="데모 URL" optional value={form.demo_url} onChange={(value) => update("demo_url", value)} />
+        <TextField label="GitHub URL" optional value={form.github_url} onChange={(value) => update("github_url", value)} />
+        <label className="field span-2 file-picker">
+          <span>첫 버전 파일</span>
+          <input multiple type="file" onChange={(event) => handleFiles(event.target.files)} />
+          <strong>
+            <Upload size={17} />
+            파일 선택
+          </strong>
+          <small>{form.files.length ? `${form.files.length}개 파일 선택됨` : "코드, 문서, 이미지, 압축 파일을 올릴 수 있습니다."}</small>
+        </label>
+        <TextField
+          label="버전 라벨"
+          optional={!filesNeedVersion}
+          placeholder="예: v1.0"
+          value={form.version_label}
+          onChange={(value) => update("version_label", value)}
+        />
+        <label className="field">
+          <span>
+            변경 요약
+            {!filesNeedVersion && <em>선택</em>}
+          </span>
+          <textarea
+            rows="3"
+            value={form.change_summary}
+            onChange={(event) => update("change_summary", event.target.value)}
+            placeholder="이번 버전에서 바뀐 점을 짧게 적어 주세요."
+          />
+        </label>
+        {filesNeedVersion && !versionReady && (
+          <p className="form-helper span-2">파일을 올릴 때는 버전 라벨과 변경 요약이 필요합니다.</p>
+        )}
+        <div className="form-actions span-2">
+          <button className="primary-button" disabled={!isReady} type="submit">
+            <Plus size={17} />
+            프로젝트 등록
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+function ProjectDetailPage({
+  data,
+  detailTab,
+  navigate,
+  onCreateComment,
+  onCreateVersion,
+  onDeleteProject,
+  onDownloadVersion,
+  onEditProject,
+  onSetDetailTab,
+  projectId,
+}) {
+  const project = data.projects.find((item) => item.id === projectId);
+
+  if (!project) {
+    return <EmptyState title="프로젝트를 찾을 수 없습니다" body="삭제되었거나 주소가 잘못되었을 수 있습니다." />;
+  }
+
+  const versions = getVersionsForProject(data, project.id);
+  const latestVersion = versions[0] || null;
+  const comments = getProjectComments(data, project.id);
+
+  return (
+    <div className="page-stack">
+      <button className="text-button" type="button" onClick={() => navigate("/projects")}>
+        <ChevronRight className="flip-icon" size={16} />
+        프로젝트로 돌아가기
+      </button>
+      <ProjectDetailHeader
+        comments={comments}
+        data={data}
+        latestVersion={latestVersion}
+        onDeleteProject={onDeleteProject}
+        onDownloadVersion={onDownloadVersion}
+        onEditProject={onEditProject}
+        onSetDetailTab={onSetDetailTab}
+        project={project}
+      />
+      <ProjectTabsSection active={detailTab} onChange={onSetDetailTab} />
+      {detailTab === "intro" && <ProjectIntro project={project} />}
+      {detailTab === "files" && (
+        <ProjectVersionsList
+          data={data}
+          onCreateVersion={(form) => onCreateVersion(project.id, form)}
+          onDownloadVersion={(version) => onDownloadVersion(project, version)}
+          project={project}
+          versions={versions}
+        />
+      )}
+      {detailTab === "feedback" && (
+        <section className="content-section" id="project-feedback">
+          <SectionHeading title="피드백" description="다운로드하거나 데모를 본 뒤 짧게 남겨 주세요." />
+          <CommentComposer onSubmit={(payload) => onCreateComment(project.id, payload)} />
+          <CommentThread comments={comments} onReply={(payload) => onCreateComment(project.id, payload)} />
+        </section>
+      )}
+      {detailTab === "updates" && <ProjectUpdates data={data} project={project} versions={versions} />}
+    </div>
+  );
+}
+
+function ProjectDetailHeader({
+  comments,
+  data,
+  latestVersion,
+  onDeleteProject,
+  onDownloadVersion,
+  onEditProject,
+  onSetDetailTab,
+  project,
+}) {
+  const fileCount = latestVersion ? getFilesForVersion(data, latestVersion.id).length : 0;
+
+  return (
+    <section className="detail-header">
+      <img
+        alt=""
+        className={project.thumbnail_url ? "detail-thumb" : "detail-thumb detail-thumb--fallback"}
+        src={project.thumbnail_url || defaultProjectThumbnail}
+      />
+      <div className="detail-copy">
+        <div className="detail-meta-line">
+          <InitialAvatar name={project.builder_name} />
+          <span>{project.builder_name}</span>
+          <Badge>{project.category}</Badge>
+          <RelativeTimeText value={project.updated_at || project.created_at} />
+        </div>
+        <h1>{project.title}</h1>
+        <p>{project.description}</p>
+        <ProjectActionBar
+          fileCount={fileCount}
+          latestVersion={latestVersion}
+          onDeleteProject={() => onDeleteProject(project.id)}
+          onDownload={() => onDownloadVersion(project, latestVersion)}
+          onEditProject={() => onEditProject(project)}
+          onFeedback={() => onSetDetailTab("feedback")}
+          project={project}
+        />
+      </div>
+      <div className="detail-counts">
+        <InfoStat label="댓글" value={comments.length} />
+        <InfoStat label="버전" value={getVersionsForProject(data, project.id).length} />
+        <InfoStat label="최신 파일" value={fileCount} />
+      </div>
+    </section>
+  );
+}
+
+function ProjectActionBar({
+  fileCount,
+  latestVersion,
+  onDeleteProject,
+  onDownload,
+  onEditProject,
+  onFeedback,
+  project,
+}) {
+  const runnableLabel = getRunnableLabel(project);
+
+  return (
+    <div className="action-bar">
+      <button className="primary-button" type="button" onClick={onDownload}>
+        <Download size={17} />
+        다운로드
+      </button>
+      <button className="secondary-button" type="button" onClick={onFeedback}>
+        <MessageCircle size={17} />
+        피드백 남기기
+      </button>
+      {project.demo_url && (
+        <a className="secondary-button" href={project.demo_url} target="_blank" rel="noreferrer">
+          <ExternalLink size={17} />
+          {runnableLabel}
+        </a>
+      )}
+      {project.category === "Prompt" && (
+        <button className="secondary-button" disabled type="button">
+          <Copy size={17} />
+          프롬프트 복사
+        </button>
+      )}
+      {!project.demo_url && ["Tool", "Game"].includes(project.category) && (
+        <button className="secondary-button" type="button" onClick={onDownload}>
+          <Download size={17} />
+          다운로드
+        </button>
+      )}
+      <button className="ghost-button" type="button" onClick={onEditProject}>
+        수정
+      </button>
+      <button className="danger-text-button" type="button" onClick={onDeleteProject}>
+        삭제
+      </button>
+      {latestVersion && <span className="action-note">{latestVersion.version_label} · 파일 {fileCount}개</span>}
+    </div>
+  );
+}
+
+function ProjectTabsSection({ active, onChange }) {
+  return (
+    <div className="detail-tabs" role="tablist" aria-label="프로젝트 상세 탭">
+      {projectTabs.map((tab) => (
+        <button
+          aria-selected={active === tab.id}
+          className={active === tab.id ? "active" : ""}
+          key={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ProjectIntro({ project }) {
+  return (
+    <section className="content-section prose-section">
+      <SectionHeading title="소개" description="프로젝트를 이해하고 실행하기 위한 기본 정보입니다." />
+      <p>{project.description}</p>
+      <dl className="info-list">
+        <div>
+          <dt>빌더</dt>
+          <dd>{project.builder_name}</dd>
+        </div>
+        <div>
+          <dt>카테고리</dt>
+          <dd>{project.category}</dd>
+        </div>
+        {project.demo_url && (
+          <div>
+            <dt>데모</dt>
+            <dd>
+              <a href={project.demo_url} target="_blank" rel="noreferrer">
+                {project.demo_url}
+              </a>
+            </dd>
+          </div>
+        )}
+        {project.github_url && (
+          <div>
+            <dt>GitHub</dt>
+            <dd>
+              <a href={project.github_url} target="_blank" rel="noreferrer">
+                {project.github_url}
+              </a>
+            </dd>
+          </div>
+        )}
+      </dl>
+    </section>
+  );
+}
+
+function ProjectVersionsList({ data, onCreateVersion, onDownloadVersion, project, versions }) {
+  const [openUpload, setOpenUpload] = useState(false);
+  const latest = versions[0];
+  const previous = versions.slice(1);
+
+  return (
+    <section className="content-section">
+      <div className="section-head-row">
+        <SectionHeading title="파일" description="버전마다 파일을 분리해 다운로드할 수 있습니다." />
+        <button className="secondary-button" type="button" onClick={() => setOpenUpload((value) => !value)}>
+          <Upload size={17} />
+          새 버전 업로드
+        </button>
+      </div>
+      {openUpload && (
+        <VersionUploadForm
+          onCancel={() => setOpenUpload(false)}
+          onSubmit={async (form) => {
+            await onCreateVersion(form);
+            setOpenUpload(false);
+          }}
+        />
+      )}
+      {!latest && <EmptyState title="아직 파일 버전이 없습니다" body="새 버전을 올려 다운로드 루프를 시작해 보세요." />}
+      {latest && (
+        <div className="version-stack">
+          <div>
+            <h3 className="version-group-title">최신 버전</h3>
+            <ProjectVersionCard
+              files={getFilesForVersion(data, latest.id)}
+              isLatest
+              onDownload={() => onDownloadVersion(latest)}
+              project={project}
+              version={latest}
+            />
+          </div>
+          {previous.length > 0 && (
+            <div>
+              <h3 className="version-group-title">이전 버전</h3>
+              {previous.map((version) => (
+                <ProjectVersionCard
+                  files={getFilesForVersion(data, version.id)}
+                  key={version.id}
+                  onDownload={() => onDownloadVersion(version)}
+                  project={project}
+                  version={version}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VersionUploadForm({ onCancel, onSubmit }) {
+  const [form, setForm] = useState({ version_label: "", change_summary: "", files: [] });
+  const ready = form.version_label.trim() && form.change_summary.trim() && form.files.length > 0;
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    if (ready) onSubmit(form);
+  }
+
+  return (
+    <form className="version-upload" onSubmit={submit}>
+      <TextField label="버전 라벨" placeholder="예: v1.1" value={form.version_label} onChange={(value) => update("version_label", value)} />
+      <label className="field">
+        <span>변경 요약</span>
+        <textarea
+          rows="3"
+          value={form.change_summary}
+          onChange={(event) => update("change_summary", event.target.value)}
+          placeholder="이번 버전에서 바뀐 점을 적어 주세요."
+        />
+      </label>
+      <label className="field file-picker">
+        <span>업로드 파일</span>
+        <input multiple type="file" onChange={(event) => update("files", Array.from(event.target.files || []))} />
+        <strong>
+          <Upload size={17} />
+          파일 선택
+        </strong>
+        <small>{form.files.length ? `${form.files.length}개 파일 선택됨` : "새 버전에 포함할 파일을 선택해 주세요."}</small>
+      </label>
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          닫기
+        </button>
+        <button className="primary-button" disabled={!ready} type="submit">
+          버전 업로드
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ProjectVersionCard({ files, isLatest = false, onDownload, version }) {
+  return (
+    <article className={`version-card ${isLatest ? "latest" : ""}`}>
+      <div className="version-card-head">
+        <div>
+          <strong>{version.version_label}</strong>
+          <small>
+            <RelativeTimeText value={version.created_at} /> · 파일 {files.length}개
+          </small>
+        </div>
+        <button className="secondary-button" type="button" onClick={onDownload}>
+          <Download size={16} />
+          다운로드
+        </button>
+      </div>
+      <p>{version.change_summary}</p>
+      <ul className="file-list">
+        {files.length ? (
+          files.map((file) => (
+            <li key={file.id}>
+              <FileText size={16} />
+              <span>{file.file_name}</span>
+              <small>{formatBytes(file.file_size)}</small>
+            </li>
+          ))
+        ) : (
+          <li>
+            <FileText size={16} />
+            <span>첨부 파일 없음</span>
+            <small>0 B</small>
+          </li>
+        )}
+      </ul>
+    </article>
+  );
+}
+
+function CommentComposer({ feedbackEnabled = true, onSubmit, parent = null }) {
+  const [authorName, setAuthorName] = useState(localStorage.getItem("a-and-i-commenter") || "");
+  const [feedbackType, setFeedbackType] = useState(feedbackTypes[0]);
+  const [body, setBody] = useState("");
+  const isReply = Boolean(parent);
+  const showFeedbackSelector = feedbackEnabled && !isReply;
+
+  function submit(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const nextAuthorName = String(formData.get("author_name") || "").trim();
+    const nextBody = String(formData.get("body") || "").trim();
+    if (!nextAuthorName || !nextBody) return;
+    localStorage.setItem("a-and-i-commenter", nextAuthorName);
+    onSubmit({
+      author_name: nextAuthorName,
+      body: nextBody,
+      feedback_type: showFeedbackSelector ? feedbackType : null,
+      parent,
+    });
+    setBody("");
+  }
+
+  return (
+    <form className={`comment-composer ${isReply ? "reply" : ""}`} onSubmit={submit}>
+      {showFeedbackSelector && (
+        <div className="feedback-selector" aria-label="피드백 유형">
+          {feedbackTypes.map((type) => (
+            <button
+              className={feedbackType === type ? "active" : ""}
+              key={type}
+              type="button"
+              onClick={() => setFeedbackType(type)}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="comment-fields">
+        <input
+          aria-label="작성자 이름"
+          name="author_name"
+          onChange={(event) => setAuthorName(event.target.value)}
+          placeholder="이름"
+          required
+          value={authorName}
+        />
+        <textarea
+          aria-label={isReply ? "답글" : feedbackEnabled ? "피드백" : "댓글"}
+          name="body"
+          onChange={(event) => setBody(event.target.value)}
+          placeholder={
+            isReply
+              ? "답글을 남겨 주세요."
+              : feedbackEnabled
+                ? "실행해 본 점, 버그, 제안을 남겨 주세요."
+                : "댓글을 남겨 주세요."
+          }
+          required
+          rows={isReply ? 2 : 4}
+          value={body}
+        />
+      </div>
+      <div className="comment-actions">
+        <button className="primary-button" type="submit">
+          <Send size={16} />
+          {isReply ? "답글 등록" : feedbackEnabled ? "피드백 등록" : "댓글 등록"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CommentThread({
+  comments,
+  emptyBody = "첫 피드백을 남겨 프로젝트를 함께 다듬어 보세요.",
+  emptyTitle = "아직 피드백이 없습니다",
+  feedbackEnabled = true,
+  onReply,
+}) {
+  const tree = useMemo(() => buildCommentTree(comments), [comments]);
+
+  if (!comments.length) {
+    return <EmptyState title={emptyTitle} body={emptyBody} />;
+  }
+
+  return (
+    <div className="comment-thread">
+      {tree.map((comment) => (
+        <CommentItem comment={comment} feedbackEnabled={feedbackEnabled} key={comment.id} onReply={onReply} />
+      ))}
+    </div>
+  );
+}
+
+function CommentItem({ comment, feedbackEnabled, onReply }) {
+  const [replyOpen, setReplyOpen] = useState(false);
+  const canReply = Number(comment.depth || 0) < 2;
+
+  return (
+    <article className={`comment-item depth-${comment.depth || 0}`}>
+      <div className="comment-main">
+        <InitialAvatar name={comment.author_name} />
+        <div>
+          <div className="comment-meta">
+            <strong>{comment.author_name}</strong>
+            <RelativeTimeText value={comment.created_at} />
+            {comment.feedback_type && <Badge tone="sky">{comment.feedback_type}</Badge>}
+          </div>
+          <p>{comment.body}</p>
+          {canReply && (
+            <button className="text-button" type="button" onClick={() => setReplyOpen((value) => !value)}>
+              <Reply size={15} />
+              답글
+            </button>
+          )}
+          {replyOpen && (
+            <CommentComposer
+              feedbackEnabled={feedbackEnabled}
+              parent={comment}
+              onSubmit={(payload) => {
+                onReply(payload);
+                setReplyOpen(false);
+              }}
+            />
+          )}
+        </div>
+      </div>
+      {comment.children?.length > 0 && (
+        <div className="comment-children">
+          {comment.children.map((child) => (
+            <CommentItem comment={child} feedbackEnabled={feedbackEnabled} key={child.id} onReply={onReply} />
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ProjectUpdates({ data, project, versions }) {
+  const items = [
+    {
+      key: "created",
+      time: project.created_at,
+      title: "프로젝트 생성",
+      body: `${project.builder_name}님이 프로젝트를 등록했습니다.`,
+    },
+    ...versions.map((version) => {
+      const files = getFilesForVersion(data, version.id);
+      return {
+        key: version.id,
+        time: version.created_at,
+        title: `${version.version_label} 업로드`,
+        body: `${version.change_summary} · 파일 ${files.length}개 추가`,
+      };
+    }),
+  ].sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
+
+  return (
+    <section className="content-section">
+      <SectionHeading title="업데이트" description="버전 업로드와 주요 변경 흐름을 시간순으로 보여 줍니다." />
+      <div className="timeline">
+        {items.map((item) => (
+          <article className="timeline-item" key={item.key}>
+            <span className="timeline-dot" />
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.body}</p>
+              <small>{formatAbsoluteDate(item.time)}</small>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CommunityListPage({ data, navigate }) {
+  const posts = useMemo(() => sortByRecent(data.communityPosts), [data.communityPosts]);
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        action={
+          <button className="primary-button" type="button" onClick={() => navigate("/community/new")}>
+            <Plus size={17} />
+            글 작성
+          </button>
+        }
+        description="AI 라이프, 질문, 작은 발견, 생각을 자유롭게 나누세요."
+        title="커뮤니티"
+      />
+      {posts.length ? (
+        <div className="community-list">
+          {posts.map((post) => (
+            <CommunityPostCard data={data} key={post.id} navigate={navigate} post={post} />
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="아직 커뮤니티 글이 없습니다" body="자유롭게 첫 글을 남겨보세요." />
+      )}
+    </div>
+  );
+}
+
+function CommunityPostCard({ data, navigate, post }) {
+  const comments = getCommunityComments(data, post.id);
+
+  return (
+    <article className="community-card">
+      <button type="button" onClick={() => navigate(`/community/${post.id}`)}>
+        <span className="community-card-main">
+          <span className="community-title-line">
+            <strong>{post.title}</strong>
+            {post.category && <Badge tone="sky">{post.category}</Badge>}
+          </span>
+          <em>{excerpt(post.body)}</em>
+          <span className="meta-row">
+            <span>{post.author_name}</span>
+            <RelativeTimeText value={post.updated_at || post.created_at} />
+            <span>댓글 {comments.length}</span>
+          </span>
+        </span>
+        <ChevronRight size={17} />
+      </button>
+    </article>
+  );
+}
+
+function CommunityPostFormPage({ data, isBusy, mode, navigate, onSubmit, postId }) {
+  const post = mode === "edit" ? data.communityPosts.find((item) => item.id === postId) : null;
+
+  if (mode === "edit" && !post) {
+    return <EmptyState title="커뮤니티 글을 찾을 수 없습니다" body="목록에서 다시 선택해 주세요." />;
+  }
+
+  return (
+    <div className="narrow-page">
+      <PageHeader
+        description="가볍게 남겨도 괜찮습니다. 질문, 발견, 생각을 빌더들과 나눠 보세요."
+        title={mode === "edit" ? "커뮤니티 글 수정" : "커뮤니티 글 작성"}
+      />
+      <CommunityPostForm
+        initialPost={post}
+        isBusy={isBusy}
+        mode={mode}
+        onCancel={() => navigate("/community")}
+        onSubmit={onSubmit}
+      />
+    </div>
+  );
+}
+
+function CommunityPostForm({ initialPost = null, isBusy, mode, onCancel, onSubmit }) {
+  const [form, setForm] = useState({
+    title: initialPost?.title || "",
+    author_name: initialPost?.author_name || localStorage.getItem("a-and-i-builder-name") || "",
+    body: initialPost?.body || "",
+    category: initialPost?.category || communityCategories[0],
+  });
+  const isEdit = mode === "edit";
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const nextForm = {
+      title: String(formData.get("title") || "").trim(),
+      author_name: String(formData.get("author_name") || "").trim(),
+      body: String(formData.get("body") || "").trim(),
+      category: String(formData.get("category") || communityCategories[0]),
+    };
+    if (!nextForm.title || !nextForm.author_name || !nextForm.body || isBusy) return;
+    localStorage.setItem("a-and-i-builder-name", nextForm.author_name);
+    onSubmit(nextForm);
+  }
+
+  return (
+    <form className="community-form" onSubmit={submit}>
+      <TextField label="제목" name="title" required value={form.title} onChange={(value) => update("title", value)} />
+      <label className="field">
+        <span>작성자 이름</span>
+        <input
+          name="author_name"
+          readOnly={isEdit}
+          required
+          value={form.author_name}
+          onChange={(event) => update("author_name", event.target.value)}
+        />
+      </label>
+      <label className="field">
+        <span>카테고리</span>
+        <select name="category" value={form.category} onChange={(event) => update("category", event.target.value)}>
+          {communityCategories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>내용</span>
+        <textarea
+          name="body"
+          required
+          rows="8"
+          value={form.body}
+          onChange={(event) => update("body", event.target.value)}
+          placeholder="AI와 함께 만들며 떠오른 질문, 발견, 생각을 자유롭게 적어 주세요."
+        />
+      </label>
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          목록으로
+        </button>
+        <button className="primary-button" disabled={isBusy} type="submit">
+          {isEdit ? "수정" : "작성"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CommunityPostDetailPage({ data, navigate, onCreateComment, onDeletePost, postId }) {
+  const post = data.communityPosts.find((item) => item.id === postId);
+
+  if (!post) {
+    return <EmptyState title="커뮤니티 글을 찾을 수 없습니다" body="목록에서 다시 선택해 주세요." />;
+  }
+
+  const comments = getCommunityComments(data, post.id);
+
+  return (
+    <div className="page-stack">
+      <button className="text-button" type="button" onClick={() => navigate("/community")}>
+        <ChevronRight className="flip-icon" size={16} />
+        커뮤니티로 돌아가기
+      </button>
+      <article className="post-detail community-detail">
+        <div className="detail-meta-line">
+          <InitialAvatar name={post.author_name} />
+          <span>{post.author_name}</span>
+          {post.category && <Badge tone="sky">{post.category}</Badge>}
+          <RelativeTimeText value={post.updated_at || post.created_at} />
+        </div>
+        <h1>{post.title}</h1>
+        <p>{post.body}</p>
+        <div className="action-bar">
+          <button className="secondary-button" type="button" onClick={() => navigate(`/community/${post.id}/edit`)}>
+            수정
+          </button>
+          <button className="danger-text-button" type="button" onClick={() => onDeletePost(post.id)}>
+            삭제
+          </button>
+          <span className="action-note">댓글 {comments.length}개</span>
+        </div>
+      </article>
+      <section className="content-section">
+        <SectionHeading title="댓글" description="피드백 유형 없이 자유롭게 이야기할 수 있습니다." />
+        <CommentComposer feedbackEnabled={false} onSubmit={(payload) => onCreateComment(post.id, payload)} />
+        <CommentThread
+          comments={comments}
+          emptyBody="첫 댓글로 대화를 열어 보세요."
+          emptyTitle="아직 댓글이 없습니다"
+          feedbackEnabled={false}
+          onReply={(payload) => onCreateComment(post.id, payload)}
+        />
+      </section>
+    </div>
+  );
+}
+
+function ChatPage({ data, isBusy, onIncomingMessage, onSendMessage }) {
+  const [authorName, setAuthorName] = useState(localStorage.getItem("a-and-i-chat-author") || "");
+  const [body, setBody] = useState("");
+  const bottomRef = useRef(null);
+  const messages = useMemo(
+    () => [...data.chatMessages].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)),
+    [data.chatMessages],
+  );
+
+  useEffect(() => {
+    const unsubscribe = subscribeToChatMessages(onIncomingMessage);
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [onIncomingMessage]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages.length]);
+
+  async function submit(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const nextAuthorName = String(formData.get("author_name") || "").trim();
+    const nextBody = String(formData.get("body") || "").trim();
+    if (!nextAuthorName || !nextBody || isBusy) return;
+
+    localStorage.setItem("a-and-i-chat-author", nextAuthorName);
+    const saved = await onSendMessage({ author_name: nextAuthorName, body: nextBody });
+    if (saved) setBody("");
+  }
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        description="지금 접속한 빌더들과 가볍게 이야기해보세요."
+        title="채팅방"
+      />
+      <section className="chat-room">
+        <ChatMessageList bottomRef={bottomRef} messages={messages} />
+        <form className="chat-composer" onSubmit={submit}>
+          <input
+            aria-label="빌더 이름"
+            name="author_name"
+            onChange={(event) => setAuthorName(event.target.value)}
+            placeholder="빌더 이름"
+            required
+            value={authorName}
+          />
+          <textarea
+            aria-label="메시지"
+            name="body"
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="메시지를 입력해 주세요."
+            required
+            rows="3"
+            value={body}
+          />
+          <button className="primary-button" disabled={isBusy} type="submit">
+            <Send size={16} />
+            전송
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function ChatMessageList({ bottomRef, messages }) {
+  if (!messages.length) {
+    return (
+      <div className="chat-message-list">
+        <EmptyState title="아직 메시지가 없습니다" body="첫 대화를 시작해보세요." compact />
+        <span ref={bottomRef} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="chat-message-list">
+      {messages.map((message) => (
+        <ChatMessageItem key={message.id} message={message} />
+      ))}
+      <span ref={bottomRef} />
+    </div>
+  );
+}
+
+function ChatMessageItem({ message }) {
+  return (
+    <article className="chat-message-item">
+      <InitialAvatar name={message.author_name} />
+      <div>
+        <div className="comment-meta">
+          <strong>{message.author_name}</strong>
+          <RelativeTimeText value={message.created_at} />
+        </div>
+        <p>{message.body}</p>
+      </div>
+    </article>
+  );
+}
+
+function ContentListPage({ collection, data, navigate }) {
+  const config = contentConfig[collection];
+  const items = sortByRecent(data[collection]);
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        action={
+          <button className="primary-button" type="button" onClick={() => navigate(`/${collection}/new`)}>
+            <Plus size={17} />
+            {config.ctaLabel}
+          </button>
+        }
+        description={config.definition}
+        title={config.title}
+      />
+      {items.length ? (
+        <div className="feed-list">
+          {items.map((item) => (
+            <ContentPostCard collection={collection} data={data} item={item} key={item.id} navigate={navigate} />
+          ))}
+        </div>
+      ) : (
+        <EmptyState title={config.emptyTitle} body={config.emptyBody} />
+      )}
+    </div>
+  );
+}
+
+function ContentPostCard({ collection, data, item, navigate }) {
+  const config = contentConfig[collection];
+  const comments = getContentComments(data, collection, item.id);
+
+  return (
+    <FeedItemRow
+      item={{
+        key: `${collection}-${item.id}`,
+        type: collection,
+        badge: config.badge,
+        title: item.title,
+        excerpt: excerpt(item.body),
+        author: item.author_name,
+        time: item.updated_at || item.created_at,
+        commentCount: comments.length,
+        path: `/${collection}/${item.id}`,
+        sourceUrl: config.hasSourceUrl ? item.source_url : "",
+      }}
+      navigate={navigate}
+    />
+  );
+}
+
+function ContentFormPage({ collection, data, isBusy, mode, navigate, onSubmit, postId }) {
+  const config = contentConfig[collection];
+  const item = mode === "edit" ? data[collection].find((candidate) => candidate.id === postId) : null;
+
+  if (mode === "edit" && !item) {
+    return <EmptyState title="게시글을 찾을 수 없습니다" body="목록에서 다시 선택해 주세요." />;
+  }
+
+  return (
+    <div className="narrow-page">
+      <PageHeader
+        description={config.formDescription}
+        title={mode === "edit" ? config.editTitle : config.createTitle}
+      />
+      <ContentForm
+        collection={collection}
+        initialItem={item}
+        isBusy={isBusy}
+        mode={mode}
+        onCancel={() => navigate(`/${collection}`)}
+        onSubmit={onSubmit}
+      />
+    </div>
+  );
+}
+
+function ContentForm({ collection, initialItem = null, isBusy, mode, onCancel, onSubmit }) {
+  const config = contentConfig[collection];
+  const [form, setForm] = useState({
+    title: initialItem?.title || "",
+    author_name: initialItem?.author_name || localStorage.getItem("a-and-i-builder-name") || "",
+    body: initialItem?.body || "",
+    source_url: initialItem?.source_url || "",
+  });
+  const isEdit = mode === "edit";
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const nextForm = {
+      title: String(formData.get("title") || "").trim(),
+      author_name: String(formData.get("author_name") || "").trim(),
+      body: String(formData.get("body") || "").trim(),
+      source_url: String(formData.get("source_url") || "").trim(),
+    };
+    if (!nextForm.title || !nextForm.author_name || !nextForm.body || isBusy) return;
+    localStorage.setItem("a-and-i-builder-name", nextForm.author_name);
+    onSubmit(nextForm);
+  }
+
+  return (
+    <form className="community-form" onSubmit={submit}>
+      <TextField label="제목" name="title" required value={form.title} onChange={(value) => update("title", value)} />
+      <label className="field">
+        <span>작성자 이름</span>
+        <input
+          name="author_name"
+          required
+          value={form.author_name}
+          onChange={(event) => update("author_name", event.target.value)}
+        />
+      </label>
+      {config.hasSourceUrl && (
+        <TextField
+          label="출처 URL"
+          name="source_url"
+          optional
+          placeholder="https://"
+          value={form.source_url}
+          onChange={(value) => update("source_url", value)}
+        />
+      )}
+      <label className="field">
+        <span>내용</span>
+        <textarea
+          name="body"
+          required
+          rows="8"
+          value={form.body}
+          onChange={(event) => update("body", event.target.value)}
+          placeholder="내용을 입력해 주세요."
+        />
+      </label>
+      <div className="form-actions">
+        <button className="secondary-button" type="button" onClick={onCancel}>
+          목록으로
+        </button>
+        <button className="primary-button" disabled={isBusy} type="submit">
+          {isEdit ? "수정" : "작성"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ContentDetailPage({ collection, data, id, navigate, onCreateComment, onDelete }) {
+  const config = contentConfig[collection];
+  const item = data[collection].find((candidate) => candidate.id === id);
+
+  if (!item) {
+    return <EmptyState title="게시글을 찾을 수 없습니다" body="목록에서 다시 선택해 주세요." />;
+  }
+
+  const comments = getContentComments(data, collection, item.id);
+
+  return (
+    <div className="page-stack">
+      <button className="text-button" type="button" onClick={() => navigate(`/${collection}`)}>
+        <ChevronRight className="flip-icon" size={16} />
+        {config.detailBackLabel}
+      </button>
+      <article className="post-detail content-detail">
+        <div className="detail-meta-line">
+          <InitialAvatar name={item.author_name} />
+          <span>{item.author_name}</span>
+          <Badge>{config.badge}</Badge>
+          <RelativeTimeText value={item.created_at} />
+        </div>
+        <h1>{item.title}</h1>
+        <p>{item.body}</p>
+        {config.hasSourceUrl && item.source_url && (
+          <a className="source-link" href={item.source_url} target="_blank" rel="noreferrer">
+            <ExternalLink size={16} />
+            출처 열기
+          </a>
+        )}
+        <div className="action-bar">
+          <button className="secondary-button" type="button" onClick={() => navigate(`/${collection}/${item.id}/edit`)}>
+            수정
+          </button>
+          <button className="danger-text-button" type="button" onClick={onDelete}>
+            삭제
+          </button>
+          <span className="action-note">댓글 {comments.length}개</span>
+        </div>
+      </article>
+      <section className="content-section">
+        <SectionHeading title="댓글" description="피드백 유형 없이 자유롭게 의견을 남길 수 있습니다." />
+        <CommentComposer feedbackEnabled={false} onSubmit={onCreateComment} />
+        <CommentThread
+          comments={comments}
+          emptyBody="첫 댓글을 남겨 대화를 시작해 보세요."
+          emptyTitle="아직 댓글이 없습니다"
+          feedbackEnabled={false}
+          onReply={onCreateComment}
+        />
+      </section>
+    </div>
+  );
+}
+
+function SearchResultsPage({ data, navigate, query }) {
+  const results = useMemo(() => searchWorkspace(data, query), [data, query]);
+
+  return (
+    <div className="page-stack">
+      <PageHeader
+        description="프로젝트, 아이디어, 인사이트 안에서만 검색합니다."
+        title={query ? `"${query}" 검색 결과` : "검색"}
+      />
+      <SearchGroup
+        badge="프로젝트"
+        items={results.projects}
+        navigate={navigate}
+        pathFor={(item) => `/projects/${item.id}`}
+      />
+      <SearchGroup
+        badge="아이디어"
+        items={results.ideas}
+        navigate={navigate}
+        pathFor={(item) => `/ideas/${item.id}`}
+      />
+      <SearchGroup
+        badge="인사이트"
+        items={results.insights}
+        navigate={navigate}
+        pathFor={(item) => `/insights/${item.id}`}
+      />
+    </div>
+  );
+}
+
+function SearchGroup({ badge, items, navigate, pathFor }) {
+  return (
+    <section className="content-section">
+      <SectionHeading title={badge} description={`${items.length}개 결과`} />
+      {items.length ? (
+        <div className="feed-list">
+          {items.map((item) => (
+            <button className="feed-row" key={item.id} type="button" onClick={() => navigate(pathFor(item))}>
+              <span className="type-dot search" />
+              <span className="feed-main">
+                <strong>{item.title}</strong>
+                <small>
+                  <Badge>{badge}</Badge>
+                  {item.author_name || item.builder_name}
+                  <span aria-hidden="true">·</span>
+                  <RelativeTimeText value={item.updated_at || item.created_at} />
+                </small>
+                <em>{excerpt(item.description || item.body)}</em>
+              </span>
+              <ChevronRight size={17} />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="결과 없음" body="다른 검색어를 입력해 보세요." compact />
+      )}
+    </section>
+  );
+}
+
+function EditProjectDialog({ isBusy, onClose, onSubmit, project }) {
+  const [form, setForm] = useState({
+    title: project.title,
+    builder_name: project.builder_name,
+    description: project.description,
+    category: project.category,
+    demo_url: project.demo_url || "",
+    github_url: project.github_url || "",
+  });
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function submit(event) {
+    event.preventDefault();
+    if (!form.title.trim() || !form.builder_name.trim() || !form.description.trim()) return;
+    onSubmit({
+      title: form.title.trim(),
+      builder_name: form.builder_name.trim(),
+      description: form.description.trim(),
+      category: form.category,
+      demo_url: form.demo_url.trim(),
+      github_url: form.github_url.trim(),
+    });
+  }
+
+  return (
+    <div className="modal-layer" role="dialog" aria-modal="true" aria-label="프로젝트 수정">
+      <form className="edit-dialog" onSubmit={submit}>
+        <div className="dialog-head">
+          <h2>프로젝트 수정</h2>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="닫기">
+            <X size={18} />
+          </button>
+        </div>
+        <TextField label="프로젝트 이름" value={form.title} onChange={(value) => update("title", value)} />
+        <TextField label="빌더 이름" value={form.builder_name} onChange={(value) => update("builder_name", value)} />
+        <label className="field">
+          <span>카테고리</span>
+          <select value={form.category} onChange={(event) => update("category", event.target.value)}>
+            {categoryTabs.slice(1).map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>설명</span>
+          <textarea rows="4" value={form.description} onChange={(event) => update("description", event.target.value)} />
+        </label>
+        <TextField label="데모 URL" optional value={form.demo_url} onChange={(value) => update("demo_url", value)} />
+        <TextField label="GitHub URL" optional value={form.github_url} onChange={(value) => update("github_url", value)} />
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onClose}>
+            취소
+          </button>
+          <button className="primary-button" disabled={isBusy} type="submit">
+            저장
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PageHeader({ action, description, title }) {
+  return (
+    <header className="page-header">
+      <div>
+        <h1>{title}</h1>
+        {description && <p>{description}</p>}
+      </div>
+      {action}
+    </header>
+  );
+}
+
+function SectionHeading({ description, title }) {
+  return (
+    <div className="section-heading">
+      <h2>{title}</h2>
+      {description && <p>{description}</p>}
+    </div>
+  );
+}
+
+function TextField({ label, name, onChange, optional = false, placeholder = "", required = false, value }) {
+  return (
+    <label className="field">
+      <span>
+        {label}
+        {optional && <em>선택</em>}
+      </span>
+      <input
+        name={name}
         placeholder={placeholder}
+        required={required}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
-      <button disabled={!value.trim()} onClick={onSubmit}>
-        <MessageCircle size={16} />
-        {buttonLabel}
+    </label>
+  );
+}
+
+function InitialAvatar({ name = "A&I" }) {
+  return <span className="initial-avatar">{initials(name)}</span>;
+}
+
+function Badge({ children, tone = "neutral" }) {
+  return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+function EmptyState({ body, compact = false, title }) {
+  return (
+    <div className={`empty-state ${compact ? "compact" : ""}`}>
+      <Sparkles size={20} />
+      <strong>{title}</strong>
+      <p>{body}</p>
+    </div>
+  );
+}
+
+function RelativeTimeText({ value }) {
+  return <span>{formatRelativeTime(value)}</span>;
+}
+
+function InfoStat({ label, value }) {
+  return (
+    <div className="info-stat">
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Toast({ body, onClose, title, tone }) {
+  return (
+    <div className={`toast ${tone}`} role="status">
+      <CheckCircle size={18} />
+      <div>
+        <strong>{title}</strong>
+        {body && <span>{body}</span>}
+      </div>
+      <button type="button" onClick={onClose} aria-label="알림 닫기">
+        <X size={14} />
       </button>
     </div>
   );
 }
 
-function FileCommentList({ comments, drafts, onReply, onReplyChange, onToggle }) {
-  const topLevel = comments.filter((comment) => !comment.parent_comment_id);
+function readRoute() {
+  const { pathname, search } = window.location;
+  return {
+    pathname,
+    search,
+    query: new URLSearchParams(search),
+    segments: pathname.split("/").filter(Boolean),
+  };
+}
 
-  return (
-    <div className="comment-list file-comments">
-      {topLevel.map((comment) => {
-        const replies = comments.filter((reply) => reply.parent_comment_id === comment.id);
-        const replyKey = `fileReply-${comment.id}`;
+function buildMixedFeed(data) {
+  const projects = data.projects.map((project) => ({
+    key: `project-${project.id}`,
+    type: "project",
+    badge: "프로젝트",
+    title: project.title,
+    excerpt: excerpt(project.description),
+    author: project.builder_name,
+    time: project.updated_at || project.created_at,
+    commentCount: getProjectComments(data, project.id).length,
+    path: `/projects/${project.id}`,
+  }));
+  const ideas = data.ideas.map((item) => toFeedItem(data, item, "ideas", "아이디어"));
+  const communityPosts = data.communityPosts.map((item) => ({
+    ...toFeedItem(data, item, "community", "커뮤니티"),
+    commentCount: getCommunityComments(data, item.id).length,
+  }));
+  const insights = data.insights.map((item) => toFeedItem(data, item, "insights", "인사이트"));
+  const announcements = data.announcements.map((item) => toFeedItem(data, item, "announcements", "공지사항"));
 
-        return (
-          <article className={comment.resolved ? "resolved" : ""} key={comment.id}>
-            <div className="comment-head">
-              <strong>{comment.author_name}</strong>
-              <span>{comment.line_number ? `${comment.line_number}번째 줄` : "파일 전체"}</span>
-            </div>
-            <p>{comment.body}</p>
-            <div className="comment-actions">
-              <small>{formatDate(comment.created_at)}</small>
-              <button onClick={() => onToggle(comment)}>
-                {comment.resolved ? <Circle size={15} /> : <CheckCircle2 size={15} />}
-                {comment.resolved ? "다시 열기" : "해결"}
-              </button>
-            </div>
-            {replies.length > 0 && (
-              <div className="reply-list">
-                {replies.map((reply) => (
-                  <div key={reply.id}>
-                    <strong>{reply.author_name}</strong>
-                    <p>{reply.body}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="reply-composer">
-              <input
-                placeholder="답글"
-                value={drafts[replyKey] || ""}
-                onChange={(event) => onReplyChange(replyKey, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onReply(comment.id);
-                }}
-              />
-              <button disabled={!drafts[replyKey]?.trim()} onClick={() => onReply(comment.id)}>
-                답글
-              </button>
-            </div>
-          </article>
-        );
-      })}
-    </div>
+  return [...projects, ...ideas, ...communityPosts, ...insights, ...announcements].sort(
+    (a, b) => new Date(b.time || 0) - new Date(a.time || 0),
   );
 }
 
-function ProjectFeedbackList({ drafts, feedback, onReply, onReplyChange }) {
-  const topLevel = feedback.filter((item) => !item.parent_feedback_id);
+function toFeedItem(data, item, collection, badge) {
+  return {
+    key: `${collection}-${item.id}`,
+    type: collection,
+    badge,
+    title: item.title,
+    excerpt: excerpt(item.body),
+    author: item.author_name,
+    time: item.updated_at || item.created_at,
+    commentCount: contentConfig[collection] ? getContentComments(data, collection, item.id).length : undefined,
+    path: `/${collection}/${item.id}`,
+    sourceUrl: item.source_url || "",
+  };
+}
 
-  return (
-    <div className="comment-list">
-      {topLevel.map((item) => {
-        const replies = feedback.filter((reply) => reply.parent_feedback_id === item.id);
-        const replyKey = `feedbackReply-${item.id}`;
+function getVersionsForProject(data, projectId) {
+  return data.projectVersions
+    .filter((version) => version.project_id === projectId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
 
-        return (
-          <article key={item.id}>
-            <div className="comment-head">
-              <strong>{item.author_name}</strong>
-              <span>{feedbackLabel(item.feedback_type)} · {formatDate(item.created_at)}</span>
-            </div>
-            <p>{item.body}</p>
-            {replies.length > 0 && (
-              <div className="reply-list">
-                {replies.map((reply) => (
-                  <div key={reply.id}>
-                    <strong>{reply.author_name}</strong>
-                    <p>{reply.body}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="reply-composer">
-              <input
-                placeholder="답글"
-                value={drafts[replyKey] || ""}
-                onChange={(event) => onReplyChange(replyKey, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") onReply(item.id);
-                }}
-              />
-              <button disabled={!drafts[replyKey]?.trim()} onClick={() => onReply(item.id)}>
-                답글
-              </button>
-            </div>
-          </article>
-        );
-      })}
-    </div>
+function getFilesForVersion(data, versionId) {
+  if (!versionId) return [];
+  return data.projectFiles
+    .filter((file) => file.version_id === versionId)
+    .sort((a, b) => (a.file_name || "").localeCompare(b.file_name || ""));
+}
+
+function getProjectComments(data, projectId) {
+  return data.comments
+    .filter((comment) => comment.target_type === "project" && comment.target_id === projectId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+function getCommunityComments(data, postId) {
+  return data.comments
+    .filter((comment) => comment.target_type === "community" && comment.target_id === postId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+function getContentComments(data, collection, itemId) {
+  const targetType = contentConfig[collection]?.targetType;
+  if (!targetType) return [];
+
+  return data.comments
+    .filter((comment) => comment.target_type === targetType && comment.target_id === itemId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+}
+
+function buildContentPayload(collection, form) {
+  const payload = {
+    title: form.title.trim(),
+    body: form.body.trim(),
+    author_name: form.author_name.trim(),
+  };
+
+  if (contentConfig[collection]?.hasSourceUrl) {
+    payload.source_url = String(form.source_url || "").trim();
+  }
+
+  return payload;
+}
+
+function buildCommentTree(comments) {
+  const byParent = new Map();
+  const cloned = comments.map((comment) => ({ ...comment, children: [] }));
+
+  cloned.forEach((comment) => {
+    const key = comment.parent_id || "root";
+    byParent.set(key, [...(byParent.get(key) || []), comment]);
+  });
+
+  function attach(parentId = "root") {
+    return (byParent.get(parentId) || []).map((comment) => ({
+      ...comment,
+      children: attach(comment.id),
+    }));
+  }
+
+  return attach();
+}
+
+function sortByRecent(items) {
+  return [...items].sort(
+    (a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0),
   );
 }
 
-function CommentList({ comments }) {
-  return (
-    <div className="comment-list">
-      {comments.map((comment) => (
-        <article key={comment.id}>
-          <div className="comment-head">
-            <strong>{comment.author_name}</strong>
-            <span>{formatDate(comment.created_at)}</span>
-          </div>
-          <p>{comment.body}</p>
-        </article>
-      ))}
-    </div>
-  );
+function searchWorkspace(data, query) {
+  const term = query.trim().toLowerCase();
+  if (!term) return { projects: [], ideas: [], insights: [] };
+
+  return {
+    projects: data.projects.filter((project) =>
+      [project.title, project.description, project.builder_name, project.category].join(" ").toLowerCase().includes(term),
+    ),
+    ideas: data.ideas.filter((item) => [item.title, item.body, item.author_name].join(" ").toLowerCase().includes(term)),
+    insights: data.insights.filter((item) =>
+      [item.title, item.body, item.author_name, item.source_url].join(" ").toLowerCase().includes(term),
+    ),
+  };
 }
 
-function FeedList({ items }) {
-  return (
-    <div className="feed-list">
-      {items.map((item) => (
-        <article key={item.id}>
-          <strong>{item.title || item.actor_name || item.author_name}</strong>
-          <p>{item.body || item.message}</p>
-          <small>{formatDate(item.created_at)}</small>
-        </article>
-      ))}
-    </div>
-  );
-}
+async function downloadVersion(project, version, files) {
+  const entries = [];
 
-function Timeline({ items }) {
-  return (
-    <div className="timeline">
-      {items.map((item) => (
-        <article key={item.id}>
-          <span />
-          <div>
-            <strong>{item.message}</strong>
-            <small>
-              {item.actor_name} · {activityLabel(item.action_type)} · {formatDate(item.created_at)}
-            </small>
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function buildFolderNodes(folders, files) {
-  const map = new Map();
-
-  function addPath(path, explicitFolder = null) {
-    const normalized = normalizeFolderPath(path);
-    if (!normalized) return;
-
-    const parts = normalized.split("/");
-    let current = "";
-
-    parts.forEach((part, index) => {
-      const parentPath = current;
-      current = joinPath(current, part);
-
-      if (!map.has(current)) {
-        map.set(current, {
-          id: explicitFolder && index === parts.length - 1 ? explicitFolder.id : current,
-          name: part,
-          parentPath,
-          path: current,
-        });
-      }
+  for (const file of files) {
+    entries.push({
+      name: file.file_name || "download",
+      blob: await getProjectFileBlob(file),
+      date: file.created_at || version?.created_at || new Date(),
     });
   }
 
-  folders.forEach((folder) => addPath(joinPath(folder.folder_path || "", folder.name), folder));
-  files.forEach((file) => addPath(file.folder_path || ""));
-
-  return Array.from(map.values()).sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function parseCsv(value = "") {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function projectToForm(project) {
-  return {
-    title: project.title || "",
-    category: project.category || "",
-    description: project.description || "",
-    collaborators: (project.collaborators || []).join(", "),
-    tags: (project.tags || []).join(", "),
-    visibility: project.visibility || "public",
-  };
-}
-
-function deriveUploadFolder(relativePath, currentFolder) {
-  const parts = relativePath.split("/").filter(Boolean);
-  if (parts.length <= 1) return currentFolder;
-  return normalizeFolderPath(parts.slice(1, -1).join("/"));
-}
-
-function copyFileRecord(file) {
-  const {
-    id,
-    created_at,
-    updated_at,
-    project_id,
-    ...rest
-  } = file;
-
-  void id;
-  void created_at;
-  void updated_at;
-  void project_id;
-
-  return {
-    ...rest,
-    download_count: 0,
-    version_number: file.version_number || 1,
-  };
-}
-
-function uniquePresence(users) {
-  const seen = new Set();
-
-  return users.filter((user) => {
-    const name = user.user_name || defaultUserName;
-    const scope = `${name}-${user.project_id || ""}-${user.file_id || ""}`;
-    if (seen.has(scope)) return false;
-    seen.add(scope);
-    return true;
-  });
-}
-
-function iconForFile(file) {
-  if (file.resource_type === "image") return ImageIcon;
-  if (file.resource_type === "archive") return FileArchive;
-  if (file.resource_type === "document") return FileText;
-  if (file.resource_type === "link") return LinkIcon;
-  return FileCode2;
-}
-
-function resourceLabel(file) {
-  const labels = {
-    archive: "압축 파일",
-    code: "코드",
-    document: "문서",
-    file: "파일",
-    image: "이미지",
-    link: "링크",
-  };
-
-  return labels[file.resource_type] || "파일";
-}
-
-function downloadNameForFile(file) {
-  if (file.resource_type === "link" && !getFileExtension(file.original_name)) {
-    return `${file.original_name}.url`;
+  if (!entries.length) {
+    entries.push({
+      name: "README.txt",
+      blob: new Blob([`${project.title}\n\n${project.description}`], { type: "text/plain" }),
+      date: new Date(),
+    });
   }
 
-  return file.original_name || file.file_name || "download";
+  if (entries.length === 1 && files.length === 1) {
+    downloadBlob(entries[0].blob, entries[0].name);
+    return;
+  }
+
+  const zipBlob = await createZipBlob(entries);
+  downloadBlob(zipBlob, `${slugify(project.title)}-${version?.version_label || "files"}.zip`);
 }
 
 function downloadBlob(blob, fileName) {
@@ -2118,119 +2430,64 @@ function downloadBlob(blob, fileName) {
   URL.revokeObjectURL(url);
 }
 
-function joinPath(...parts) {
-  return normalizeFolderPath(parts.filter(Boolean).join("/"));
+function getRunnableLabel(project) {
+  if (project.category === "Web") return "데모 보기";
+  if (["Tool", "Game"].includes(project.category)) return "실행하기";
+  return "데모 보기";
 }
 
-function slugify(value = "project") {
-  return value
-    .trim()
-    .replace(/[^\w가-힣.-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "") || "project";
+function formatRelativeTime(value) {
+  if (!value) return "방금 전";
+  const diffMs = Date.now() - new Date(value).getTime();
+  const seconds = Math.max(0, Math.floor(diffMs / 1000));
+  if (seconds < 60) return "방금 전";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}분 전`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}일 전`;
+  return formatAbsoluteDate(value);
 }
 
-function highlightLine(line, language) {
-  const commentMatch = line.match(/^(\s*)(\/\/.*|#.*|--.*)$/);
-  if (commentMatch && ["js", "jsx", "ts", "tsx", "css", "py", "sql", "java", "c", "cpp"].includes(language)) {
-    return <span className="tok-comment">{line}</span>;
-  }
-
-  const keywordPattern =
-    /\b(import|from|export|function|return|const|let|var|if|else|for|while|class|extends|async|await|try|catch|new|switch|case|break|default|true|false|null|select|from|where|insert|update|delete|create|table|public|def|return|interface|type)\b/g;
-  const tokenPattern = /("[^"]*"|'[^']*'|`[^`]*`|\b\d+(\.\d+)?\b)/g;
-  const pieces = [];
-  let cursor = 0;
-
-  for (const match of line.matchAll(tokenPattern)) {
-    if (match.index > cursor) {
-      pieces.push(...highlightKeywords(line.slice(cursor, match.index), keywordPattern));
-    }
-
-    pieces.push(
-      <span className={/^\d/.test(match[0]) ? "tok-number" : "tok-string"} key={`${match.index}-${match[0]}`}>
-        {match[0]}
-      </span>,
-    );
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < line.length) {
-    pieces.push(...highlightKeywords(line.slice(cursor), keywordPattern));
-  }
-
-  return pieces.length ? pieces : line;
-}
-
-function highlightKeywords(value, keywordPattern) {
-  const pieces = [];
-  let cursor = 0;
-
-  for (const match of value.matchAll(keywordPattern)) {
-    if (match.index > cursor) pieces.push(value.slice(cursor, match.index));
-    pieces.push(
-      <span className="tok-keyword" key={`${match.index}-${match[0]}`}>
-        {match[0]}
-      </span>,
-    );
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < value.length) pieces.push(value.slice(cursor));
-  return pieces;
-}
-
-function feedbackLabel(type) {
-  const labels = {
-    discussion: "토론",
-    reply: "답글",
-    review: "리뷰",
-    suggestion: "제안",
-  };
-
-  return labels[type] || "피드백";
-}
-
-function activityLabel(type) {
-  const labels = {
-    chat_message: "채팅",
-    file_comment: "파일 댓글",
-    file_deleted: "파일 삭제",
-    file_downloaded: "파일 다운로드",
-    file_renamed: "파일 정리",
-    file_shared: "파일 공유",
-    file_uploaded: "파일 업로드",
-    folder_created: "폴더 생성",
-    link_added: "링크 추가",
-    project_created: "프로젝트 생성",
-    project_downloaded: "프로젝트 다운로드",
-    project_feedback: "피드백",
-    project_forked: "포크",
-    project_liked: "좋아요",
-    project_updated: "프로젝트 수정",
-    update: "업데이트",
-  };
-
-  return labels[type] || "활동";
-}
-
-function formatBytes(bytes) {
-  const size = Number(bytes || 0);
-  if (!size) return "0 B";
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDate(value) {
+function formatAbsoluteDate(value) {
   if (!value) return "";
-
   return new Intl.DateTimeFormat("ko-KR", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatBytes(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function excerpt(value = "") {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length > 92 ? `${clean.slice(0, 92)}...` : clean;
+}
+
+function initials(value = "A&I") {
+  const cleaned = value.trim();
+  if (!cleaned) return "AI";
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return parts.map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function slugify(value = "project") {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-|-$/g, "") || "project"
+  );
 }
 
 export default App;
