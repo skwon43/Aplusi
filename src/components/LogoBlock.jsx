@@ -1,39 +1,27 @@
-const logoBlue = "#4EA3F7";
+import { useState } from "react";
 
-function LogoSymbol({ className = "" }) {
+const logoMarkSrc = "/brand/logo-mark.svg";
+
+function LogoSymbol({ className = "", onError }) {
   return (
-    <svg
+    <img
       aria-hidden="true"
-      className={`logo-symbol-svg ${className}`.trim()}
-      focusable="false"
-      viewBox="0 0 64 64"
-    >
-      <circle cx="32" cy="8.5" r="5.5" fill={logoBlue} />
-      <path
-        d="M33.5 19.5C26 19.5 21 24.4 21 31c0 7 5.8 11.3 12.4 11.3 7.2 0 11.4-4.8 11.4-10.5 0-4.8-3.7-8.5-8.7-8.5-5.5 0-9.1 3.7-9.1 8.3 0 5.8 6.1 9.1 13.8 15.6"
-        fill="none"
-        stroke={logoBlue}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="5.4"
-      />
-      <path
-        d="M31.2 42.5 20.5 57M32.8 42.5 43.5 57M25.5 50.3h13"
-        fill="none"
-        stroke={logoBlue}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="5.8"
-      />
-    </svg>
+      alt=""
+      className={`logo-mark ${className}`.trim()}
+      onError={onError}
+      src={logoMarkSrc}
+    />
   );
 }
 
-export default function LogoBlock({ className = "", onClick, symbolOnly = false }) {
+function LogoBlock({ className = "", compact = false, onClick, symbolOnly = false }) {
+  const [markFailed, setMarkFailed] = useState(false);
+  const showWordmark = !compact && !symbolOnly;
+  const showFallbackWordmark = showWordmark || markFailed;
   const content = (
     <>
-      <LogoSymbol />
-      {!symbolOnly && <span className="logo-wordmark">A&amp;I</span>}
+      {!markFailed && <LogoSymbol onError={() => setMarkFailed(true)} />}
+      {showFallbackWordmark && <span className="logo-wordmark">A&amp;I</span>}
     </>
   );
 
@@ -53,4 +41,5 @@ export default function LogoBlock({ className = "", onClick, symbolOnly = false 
   return <span className={`logo-block ${className}`.trim()}>{content}</span>;
 }
 
-export { LogoSymbol };
+export default LogoBlock;
+export { LogoBlock, LogoSymbol };
