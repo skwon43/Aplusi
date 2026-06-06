@@ -634,9 +634,8 @@ function TopBar({ navigate, onOpenDrawer, route }) {
       </button>
       <LogoBlock onClick={() => navigate("/")} />
       <SearchBar navigate={navigate} query={route.query.get("q") || ""} />
-      <button className="primary-button topbar-cta" type="button" onClick={() => navigate("/projects/new")}>
-        <Plus size={17} />
-        새 프로젝트 등록
+      <button className="signin-placeholder" type="button" aria-disabled="true">
+        Sign in
       </button>
     </header>
   );
@@ -687,9 +686,9 @@ function SearchBar({ navigate, query }) {
     <form className="search-bar" role="search" onSubmit={submit}>
       <Search size={17} />
       <input
-        aria-label="프로젝트, 아이디어, 인사이트 검색"
+        aria-label="검색"
         onChange={(event) => setValue(event.target.value)}
-        placeholder="프로젝트, 아이디어, 인사이트 검색"
+        placeholder="검색"
         value={value}
       />
     </form>
@@ -795,7 +794,7 @@ function ProjectsPage({ data, navigate }) {
         action={
           <button className="primary-button" type="button" onClick={() => navigate("/projects/new")}>
             <Plus size={17} />
-            새 프로젝트 등록
+            프로젝트 등록
           </button>
         }
         description="다운로드하고 실행해 보고 피드백을 남기는 프로젝트 발견 공간입니다."
