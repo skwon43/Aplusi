@@ -29,6 +29,7 @@ import {
   deleteProjectBundle,
   getProjectFileBlob,
   loadAllData,
+  MAX_PROJECT_FILE_SIZE,
   subscribeToChatMessages,
   updateRecord,
   uploadProjectFile,
@@ -120,15 +121,14 @@ function App() {
   const [data, setData] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [toast, setToast] = useState(null);
   const [editingProject, setEditingProject] = useState(null);
   const [detailTab, setDetailTab] = useState("intro");
 
   const refresh = useCallback(async () => {
-    console.log("[A&I data-refresh] loadAllData start");
     const result = await loadAllData();
-    console.log("[A&I data-refresh] loadAllData success", { source: result.source });
     setLoadError(null);
     setData(result.data);
     return result.data;
@@ -173,20 +173,15 @@ function App() {
   async function runTask(task, successTitle, successBody = "") {
     setIsBusy(true);
     try {
-      console.log("[A&I async-task] task start");
       const result = await task();
-      console.log("[A&I async-task] task success");
-      console.log("[A&I async-task] refresh start");
       await refresh();
-      console.log("[A&I async-task] refresh success");
       showToast("success", successTitle, successBody);
       return result;
     } catch (error) {
-      console.error("[A&I async-task] error", error);
       showToast("error", "처리하지 못했습니다", error.message);
       return null;
     } finally {
-      console.log("[A&I async-task] FINALLY loading reset");
+      setBusyMessage("");
       setIsBusy(false);
     }
   }
@@ -194,17 +189,15 @@ function App() {
   async function handleCreateProject(form) {
     setIsBusy(true);
     try {
+      setBusyMessage("프로젝트 등록을 준비하는 중...");
+      assertProjectFilesAllowed(form.files);
       const hasFiles = form.files.length > 0;
       const hasVersionInfo = form.version_label.trim() || form.change_summary.trim();
-      console.log("[A&I project-create] START", {
-        fileCount: form.files.length,
-        hasThumbnail: Boolean(form.thumbnailFile),
-        hasVersionInfo: Boolean(hasVersionInfo),
-      });
-      console.log("[A&I project-create] STEP 1 thumbnail upload start");
+
+      setBusyMessage("썸네일 업로드 중...");
       const thumbnailUrl = await uploadThumbnail(form.thumbnailFile);
-      console.log("[A&I project-create] STEP 1 thumbnail upload success", { thumbnailUrl });
-      console.log("[A&I project-create] STEP 2 projects insert start");
+
+      setBusyMessage("프로젝트 정보 저장 중...");
       const savedProject = await createRecord("projects", {
         title: form.title.trim(),
         builder_name: form.builder_name.trim(),
@@ -214,36 +207,24 @@ function App() {
         demo_url: form.demo_url.trim(),
         github_url: form.github_url.trim(),
       });
-      console.log("[A&I project-create] STEP 2 projects insert success", { projectId: savedProject.id });
       let savedVersion = null;
       const savedFiles = [];
 
       if (hasFiles || hasVersionInfo) {
-        console.log("[A&I project-create] STEP 3 project_versions insert start");
+        setBusyMessage("버전 정보 생성 중...");
         savedVersion = await createRecord("projectVersions", {
           project_id: savedProject.id,
           version_label: form.version_label.trim() || "v1.0",
           change_summary: form.change_summary.trim() || "프로젝트가 등록되었습니다.",
         });
-        console.log("[A&I project-create] STEP 3 project_versions insert success", { versionId: savedVersion.id });
 
         for (const [index, file] of form.files.entries()) {
-          console.log("[A&I project-create] STEP 4 project file upload start", {
-            fileIndex: index,
-            fileName: file.name,
-            versionId: savedVersion.id,
-          });
+          setBusyMessage(`파일 업로드 중... (${index + 1}/${form.files.length}) ${file.name}`);
           savedFiles.push(await uploadProjectFile({ file, versionId: savedVersion.id }));
-          console.log("[A&I project-create] STEP 4 project file upload success", {
-            fileIndex: index,
-            fileName: file.name,
-          });
         }
-      } else {
-        console.log("[A&I project-create] STEP 3 project_versions skipped");
       }
 
-      console.log("[A&I project-create] STEP 5 optimistic state update start");
+      setBusyMessage("완료 처리 중...");
       setData((current) => {
         if (!current) return current;
         return {
@@ -260,69 +241,65 @@ function App() {
             : current.projectFiles,
         };
       });
-      console.log("[A&I project-create] STEP 5 optimistic state update queued");
 
-      let refreshError = null;
-      try {
-        console.log("[A&I project-create] STEP 6 workspace refresh start");
-        await refresh();
-        console.log("[A&I project-create] STEP 6 workspace refresh success");
-      } catch (error) {
-        console.error("[A&I project-create] STEP 6 workspace refresh error", error);
-        refreshError = error;
-      }
-
-      if (refreshError) {
-        showToast("error", "프로젝트는 저장됐지만 새로고침에 실패했습니다", refreshError.message);
-      } else {
-        showToast("success", "프로젝트가 등록되었습니다", "첫 번째 빌더 루프를 시작할 수 있습니다.");
-      }
-      console.log("[A&I project-create] STEP 7 navigate start", { projectId: savedProject.id });
+      showToast("success", "프로젝트가 등록되었습니다", "첫 번째 빌더 루프를 시작할 수 있습니다.");
       navigate(`/projects/${savedProject.id}`);
-      console.log("[A&I project-create] STEP 7 navigate success");
+      refresh().catch((error) => {
+        showToast("error", "프로젝트는 저장됐지만 새로고침에 실패했습니다", error.message);
+      });
       return savedProject;
     } catch (error) {
-      console.error("[A&I project-create] FAILED", error);
       showToast("error", "처리하지 못했습니다", error.message);
       return null;
     } finally {
-      console.log("[A&I project-create] FINALLY loading reset");
+      setBusyMessage("");
       setIsBusy(false);
     }
   }
 
   async function handleCreateVersion(projectId, form) {
-    return runTask(
-      async () => {
-        console.log("[A&I project-version] STEP 1 project_versions insert start", { projectId });
-        const version = await createRecord("projectVersions", {
-          project_id: projectId,
-          version_label: form.version_label.trim(),
-          change_summary: form.change_summary.trim(),
-        });
-        console.log("[A&I project-version] STEP 1 project_versions insert success", { versionId: version.id });
+    setIsBusy(true);
+    try {
+      setBusyMessage("새 버전 생성 중...");
+      assertProjectFilesAllowed(form.files);
+      const version = await createRecord("projectVersions", {
+        project_id: projectId,
+        version_label: form.version_label.trim(),
+        change_summary: form.change_summary.trim(),
+      });
+      const savedFiles = [];
 
-        for (const [index, file] of form.files.entries()) {
-          console.log("[A&I project-version] STEP 2 project file upload start", {
-            fileIndex: index,
-            fileName: file.name,
-            versionId: version.id,
-          });
-          await uploadProjectFile({ file, versionId: version.id });
-          console.log("[A&I project-version] STEP 2 project file upload success", {
-            fileIndex: index,
-            fileName: file.name,
-          });
-        }
+      for (const [index, file] of form.files.entries()) {
+        setBusyMessage(`파일 업로드 중... (${index + 1}/${form.files.length}) ${file.name}`);
+        savedFiles.push(await uploadProjectFile({ file, versionId: version.id }));
+      }
 
-        console.log("[A&I project-version] STEP 3 projects update start", { projectId });
-        await updateRecord("projects", projectId, {});
-        console.log("[A&I project-version] STEP 3 projects update success", { projectId });
-        return version;
-      },
-      "새 버전이 업로드되었습니다",
-      "파일 탭과 업데이트 기록에 반영했습니다.",
-    );
+      setBusyMessage("완료 처리 중...");
+      const savedProject = await updateRecord("projects", projectId, { updated_at: new Date().toISOString() });
+      setData((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          projects: current.projects.map((project) => (project.id === projectId ? savedProject : project)),
+          projectVersions: [version, ...current.projectVersions.filter((item) => item.id !== version.id)],
+          projectFiles: [
+            ...savedFiles,
+            ...current.projectFiles.filter((item) => !savedFiles.some((file) => file.id === item.id)),
+          ],
+        };
+      });
+      showToast("success", "새 버전이 업로드되었습니다", "파일 탭과 업데이트 기록에 반영했습니다.");
+      refresh().catch((error) => {
+        showToast("error", "새 버전은 저장됐지만 새로고침에 실패했습니다", error.message);
+      });
+      return version;
+    } catch (error) {
+      showToast("error", "처리하지 못했습니다", error.message);
+      return null;
+    } finally {
+      setBusyMessage("");
+      setIsBusy(false);
+    }
   }
 
   async function handleUpdateProject(projectId, payload) {
@@ -491,8 +468,12 @@ function App() {
   }, []);
 
   async function handleDownloadVersion(project, version) {
-    const files = getFilesForVersion(data, version?.id);
-    await downloadVersion(project, version, files);
+    try {
+      const files = getFilesForVersion(data, version?.id);
+      await downloadVersion(project, version, files);
+    } catch (error) {
+      showToast("error", "파일을 다운로드하지 못했습니다", error.message);
+    }
   }
 
   if (!data && loadError) {
@@ -515,6 +496,7 @@ function App() {
   }
 
   const page = renderPage({
+    busyMessage,
     data,
     detailTab,
     isBusy,
@@ -570,12 +552,19 @@ function renderPage(context) {
   }
 
   if (section === "projects" && id === "new") {
-    return <ProjectCreatePage isBusy={context.isBusy} onSubmit={context.onCreateProject} />;
+    return (
+      <ProjectCreatePage
+        busyMessage={context.busyMessage}
+        isBusy={context.isBusy}
+        onSubmit={context.onCreateProject}
+      />
+    );
   }
 
   if (section === "projects" && id) {
     return (
       <ProjectDetailPage
+        busyMessage={context.busyMessage}
         data={data}
         detailTab={context.detailTab}
         isBusy={context.isBusy}
@@ -971,19 +960,19 @@ function ProjectCard({ data, navigate, project }) {
   );
 }
 
-function ProjectCreatePage({ isBusy, onSubmit }) {
+function ProjectCreatePage({ busyMessage, isBusy, onSubmit }) {
   return (
     <div className="narrow-page">
       <PageHeader
         description="파일이 있다면 첫 버전 정보까지 함께 남겨 주세요."
         title="새 프로젝트 등록"
       />
-      <ProjectForm isBusy={isBusy} onSubmit={onSubmit} />
+      <ProjectForm busyMessage={busyMessage} isBusy={isBusy} onSubmit={onSubmit} />
     </div>
   );
 }
 
-function ProjectForm({ isBusy, onSubmit }) {
+function ProjectForm({ busyMessage, isBusy, onSubmit }) {
   const [form, setForm] = useState({
     title: "",
     builder_name: "",
@@ -1000,11 +989,14 @@ function ProjectForm({ isBusy, onSubmit }) {
 
   const filesNeedVersion = form.files.length > 0;
   const versionReady = !filesNeedVersion || (form.version_label.trim() && form.change_summary.trim());
+  const oversizedFiles = getOversizedFiles(form.files);
+  const oversizedError = getOversizedFileMessage(oversizedFiles);
   const isReady =
     form.title.trim() &&
     form.builder_name.trim() &&
     form.description.trim() &&
     versionReady &&
+    !oversizedFiles.length &&
     !isBusy;
 
   function update(field, value) {
@@ -1073,6 +1065,7 @@ function ProjectForm({ isBusy, onSubmit }) {
           </strong>
           <small>{form.files.length ? `${form.files.length}개 파일 선택됨` : "코드, 문서, 이미지, 압축 파일을 올릴 수 있습니다."}</small>
         </label>
+        <SelectedFileList className="span-2" files={form.files} />
         <TextField
           label="버전 라벨"
           optional={!filesNeedVersion}
@@ -1095,10 +1088,11 @@ function ProjectForm({ isBusy, onSubmit }) {
         {filesNeedVersion && !versionReady && (
           <p className="form-helper span-2">파일을 올릴 때는 버전 라벨과 변경 요약이 필요합니다.</p>
         )}
+        {oversizedError && <p className="form-helper error span-2">{oversizedError}</p>}
         <div className="form-actions span-2">
           <button className="primary-button" disabled={!isReady} type="submit">
             <Plus size={17} />
-            {isBusy ? "등록 중..." : "프로젝트 등록"}
+            {isBusy ? busyMessage || "등록 중..." : "프로젝트 등록"}
           </button>
         </div>
       </div>
@@ -1107,6 +1101,7 @@ function ProjectForm({ isBusy, onSubmit }) {
 }
 
 function ProjectDetailPage({
+  busyMessage,
   data,
   detailTab,
   isBusy,
@@ -1149,6 +1144,7 @@ function ProjectDetailPage({
       {detailTab === "intro" && <ProjectIntro project={project} />}
       {detailTab === "files" && (
         <ProjectVersionsList
+          busyMessage={busyMessage}
           data={data}
           isBusy={isBusy}
           onCreateVersion={(form) => onCreateVersion(project.id, form)}
@@ -1323,7 +1319,7 @@ function ProjectIntro({ project }) {
   );
 }
 
-function ProjectVersionsList({ data, isBusy, onCreateVersion, onDownloadVersion, project, versions }) {
+function ProjectVersionsList({ busyMessage, data, isBusy, onCreateVersion, onDownloadVersion, project, versions }) {
   const [openUpload, setOpenUpload] = useState(false);
   const latest = versions[0];
   const previous = versions.slice(1);
@@ -1339,6 +1335,7 @@ function ProjectVersionsList({ data, isBusy, onCreateVersion, onDownloadVersion,
       </div>
       {openUpload && (
         <VersionUploadForm
+          busyMessage={busyMessage}
           isBusy={isBusy}
           onCancel={() => setOpenUpload(false)}
           onSubmit={async (form) => {
@@ -1380,9 +1377,16 @@ function ProjectVersionsList({ data, isBusy, onCreateVersion, onDownloadVersion,
   );
 }
 
-function VersionUploadForm({ isBusy, onCancel, onSubmit }) {
+function VersionUploadForm({ busyMessage, isBusy, onCancel, onSubmit }) {
   const [form, setForm] = useState({ version_label: "", change_summary: "", files: [] });
-  const ready = form.version_label.trim() && form.change_summary.trim() && form.files.length > 0 && !isBusy;
+  const oversizedFiles = getOversizedFiles(form.files);
+  const oversizedError = getOversizedFileMessage(oversizedFiles);
+  const ready =
+    form.version_label.trim() &&
+    form.change_summary.trim() &&
+    form.files.length > 0 &&
+    !oversizedFiles.length &&
+    !isBusy;
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1390,7 +1394,7 @@ function VersionUploadForm({ isBusy, onCancel, onSubmit }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (ready) onSubmit(form);
+    if (ready) await onSubmit(form);
   }
 
   return (
@@ -1414,15 +1418,36 @@ function VersionUploadForm({ isBusy, onCancel, onSubmit }) {
         </strong>
         <small>{form.files.length ? `${form.files.length}개 파일 선택됨` : "새 버전에 포함할 파일을 선택해 주세요."}</small>
       </label>
+      <SelectedFileList files={form.files} />
+      {oversizedError && <p className="form-helper error">{oversizedError}</p>}
       <div className="form-actions">
         <button className="secondary-button" disabled={isBusy} type="button" onClick={onCancel}>
           닫기
         </button>
         <button className="primary-button" disabled={!ready} type="submit">
-          {isBusy ? "업로드 중..." : "버전 업로드"}
+          {isBusy ? busyMessage || "업로드 중..." : "버전 업로드"}
         </button>
       </div>
     </form>
+  );
+}
+
+function SelectedFileList({ className = "", files }) {
+  if (!files.length) return null;
+
+  return (
+    <ul className={`selected-file-list ${className}`.trim()}>
+      {files.map((file) => {
+        const oversized = Number(file.size || 0) > MAX_PROJECT_FILE_SIZE;
+        return (
+          <li className={oversized ? "error" : ""} key={`${file.name}-${file.size}-${file.lastModified}`}>
+            <FileText size={15} />
+            <span>{file.name}</span>
+            <small>{formatBytes(file.size)}</small>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -2580,6 +2605,22 @@ function formatBytes(bytes) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getOversizedFiles(files = []) {
+  return files.filter((file) => Number(file.size || 0) > MAX_PROJECT_FILE_SIZE);
+}
+
+function getOversizedFileMessage(files = []) {
+  if (!files.length) return "";
+  return `파일 크기는 50MB 이하만 업로드할 수 있습니다: ${files.map((file) => file.name || "파일").join(", ")}`;
+}
+
+function assertProjectFilesAllowed(files = []) {
+  const oversizedFiles = getOversizedFiles(files);
+  if (oversizedFiles.length) {
+    throw new Error(getOversizedFileMessage(oversizedFiles));
+  }
 }
 
 function excerpt(value = "") {

@@ -4,6 +4,9 @@ import { isSupabaseReady, supabase } from "./supabaseClient";
 const thumbnailBucket = "thumbnails";
 const projectFileBucket = "project-files";
 
+export const MAX_PROJECT_FILE_SIZE = 50 * 1024 * 1024;
+const PROJECT_UPLOAD_TIMEOUT_MS = 180000;
+
 export const tableMap = {
   projects: "projects",
   projectVersions: "project_versions",
@@ -39,18 +42,9 @@ export async function loadAllData() {
 async function fetchSupabaseData() {
   const entries = await Promise.all(
     Object.entries(tableMap).map(async ([key, table]) => {
-      console.log("[A&I data-refresh] table select start", { collection: key, table });
       const { data, error } = await supabase.from(table).select("*").order("created_at", { ascending: false });
 
-      console.log("[A&I data-refresh] table select finished", {
-        collection: key,
-        hasError: Boolean(error),
-        rowCount: data?.length ?? 0,
-      });
-      if (error) {
-        console.error("[A&I data-refresh] table select error", { collection: key, table, error });
-        throw formatSupabaseError(error);
-      }
+      if (error) throw formatSupabaseError(error);
       return [key, data ?? []];
     }),
   );
@@ -179,63 +173,58 @@ export function subscribeToChatMessages(onInsert) {
 }
 
 export async function uploadThumbnail(file) {
-  if (!file) {
-    console.log("[A&I project-create] STORAGE thumbnail skipped");
-    return null;
-  }
+  if (!file) return null;
   if (!file.type?.startsWith("image/")) {
     throw new Error("썸네일은 이미지 파일만 사용할 수 있습니다.");
   }
 
   ensureSupabaseReady();
   const storagePath = `${Date.now()}-${safeFileName(file.name)}`;
-  console.log("[A&I project-create] STORAGE thumbnail upload request start", {
-    bucket: thumbnailBucket,
-    fileName: file.name,
-    storagePath,
-  });
-  const { error } = await supabase.storage.from(thumbnailBucket).upload(storagePath, file, { upsert: false });
-  console.log("[A&I project-create] STORAGE thumbnail upload request finished", { hasError: Boolean(error) });
-  if (error) {
-    console.error("[A&I project-create] STORAGE thumbnail upload error", error);
-    throw formatSupabaseError(error);
-  }
+  const { error } = await withTimeout(
+    supabase.storage.from(thumbnailBucket).upload(storagePath, file, {
+      contentType: file.type || "image/png",
+      upsert: false,
+    }),
+    `${file.name || "썸네일"} 업로드`,
+    PROJECT_UPLOAD_TIMEOUT_MS,
+  );
+  if (error) throw formatSupabaseError(error);
   const { data } = supabase.storage.from(thumbnailBucket).getPublicUrl(storagePath);
-  console.log("[A&I project-create] STORAGE thumbnail public URL ready");
   return data.publicUrl;
 }
 
 export async function uploadProjectFile({ file, versionId }) {
+  if (!versionId) throw new Error("파일을 저장할 버전 정보가 없습니다.");
+  validateProjectFile(file);
+
+  const fileName = file.name || "download";
+  const fileSize = Number(file.size ?? 0);
   const payload = {
     version_id: versionId,
-    file_name: file.name,
-    file_size: file.size,
+    version_group: versionId,
+    file_name: fileName,
+    original_name: fileName,
+    file_size: fileSize,
+    size_bytes: fileSize,
   };
 
   ensureSupabaseReady();
-  const storagePath = `${versionId}/${Date.now()}-${safeFileName(file.name)}`;
-  console.log("[A&I project-create] STORAGE project file upload request start", {
-    bucket: projectFileBucket,
-    fileName: file.name,
-    storagePath,
-    versionId,
-  });
-  const { error } = await supabase.storage.from(projectFileBucket).upload(storagePath, file, { upsert: false });
-  console.log("[A&I project-create] STORAGE project file upload request finished", { hasError: Boolean(error) });
-  if (error) {
-    console.error("[A&I project-create] STORAGE project file upload error", error);
-    throw formatSupabaseError(error);
-  }
+  const storagePath = `${versionId}/${Date.now()}-${safeFileName(fileName)}`;
+  const { error } = await withTimeout(
+    supabase.storage.from(projectFileBucket).upload(storagePath, file, {
+      contentType: file.type || "application/octet-stream",
+      upsert: false,
+    }),
+    `${fileName} 업로드`,
+    PROJECT_UPLOAD_TIMEOUT_MS,
+  );
+  if (error) throw formatSupabaseError(error);
   const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
-  console.log("[A&I project-create] STORAGE project file public URL ready");
 
-  console.log("[A&I project-create] STEP 4B project_files insert start", { fileName: file.name, versionId });
-  const savedFile = await createRecord("projectFiles", {
+  return createRecord("projectFiles", {
     ...payload,
     file_url: data.publicUrl,
   });
-  console.log("[A&I project-create] STEP 4B project_files insert success", { fileId: savedFile.id });
-  return savedFile;
 }
 
 export async function getProjectFileBlob(fileRecord) {
@@ -243,8 +232,33 @@ export async function getProjectFileBlob(fileRecord) {
     return new Blob([""], { type: "application/octet-stream" });
   }
 
-  const response = await fetch(fileRecord.file_url);
+  const response = await withTimeout(
+    fetch(fileRecord.file_url),
+    `${fileRecord.file_name || "파일"} 다운로드`,
+    PROJECT_UPLOAD_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error(`파일 다운로드에 실패했습니다. HTTP ${response.status}`);
+  }
   return response.blob();
+}
+
+export function validateProjectFile(file) {
+  if (!file) throw new Error("업로드할 파일을 선택해 주세요.");
+  if (Number(file.size || 0) > MAX_PROJECT_FILE_SIZE) {
+    throw new Error(`파일 크기는 50MB 이하만 업로드할 수 있습니다. (${file.name || "파일"})`);
+  }
+}
+
+function withTimeout(promise, label, ms) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = globalThis.setTimeout(() => {
+      reject(new Error(`${label} 시간이 너무 오래 걸립니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.`));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => globalThis.clearTimeout(timeoutId));
 }
 
 function safeFileName(name = "file") {
@@ -254,6 +268,14 @@ function safeFileName(name = "file") {
 function formatSupabaseError(error) {
   const message = error?.message || String(error);
   const code = error?.code || "";
+
+  if (error?.name === "AbortError" || error?.name === "TimeoutError" || message.includes("aborted")) {
+    return new Error("Supabase request timed out. Check network access, Supabase project status, and storage policies.");
+  }
+
+  if (message.includes("fetch failed")) {
+    return new Error(`Supabase network request failed. Original error: ${message}`);
+  }
 
   if (code === "PGRST204" || code === "PGRST205" || message.includes("schema cache")) {
     return new Error(

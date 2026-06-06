@@ -1,12 +1,21 @@
+-- A&I Community Supabase schema
+-- Fixed for project file uploads:
+-- - project_files.version_group is nullable for compatibility
+-- - project_files.original_name is nullable/defaulted for compatibility
+-- - project_versions.version_label has a default
+-- - public storage buckets and storage.objects policies are included
+
 create extension if not exists "pgcrypto";
 
+-- Storage buckets used by A&I
 insert into storage.buckets (id, name, public)
 values
   ('thumbnails', 'thumbnails', true),
   ('project-files', 'project-files', true),
   ('brand-assets', 'brand-assets', true)
-on conflict (id) do nothing;
+on conflict (id) do update set public = excluded.public;
 
+-- Projects
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -22,48 +31,111 @@ create table if not exists public.projects (
 
 alter table public.projects add column if not exists title text;
 alter table public.projects add column if not exists description text default '';
-alter table public.projects add column if not exists builder_name text not null default 'A&I Builder';
-alter table public.projects add column if not exists category text not null default 'Web';
+alter table public.projects add column if not exists builder_name text default 'A&I Builder';
+alter table public.projects add column if not exists category text default 'Web';
 alter table public.projects add column if not exists thumbnail_url text;
 alter table public.projects add column if not exists demo_url text default '';
 alter table public.projects add column if not exists github_url text default '';
 alter table public.projects add column if not exists created_at timestamptz default now();
 alter table public.projects add column if not exists updated_at timestamptz default now();
 
+update public.projects set title = 'Untitled Project' where title is null;
+update public.projects set builder_name = 'A&I Builder' where builder_name is null;
+update public.projects set category = 'Web' where category is null;
+
+alter table public.projects alter column title set not null;
+alter table public.projects alter column builder_name set not null;
+alter table public.projects alter column builder_name set default 'A&I Builder';
+alter table public.projects alter column category set not null;
+alter table public.projects alter column category set default 'Web';
+alter table public.projects alter column description set default '';
+alter table public.projects alter column demo_url set default '';
+alter table public.projects alter column github_url set default '';
+
+-- Project versions
 create table if not exists public.project_versions (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references public.projects(id) on delete cascade,
-  version_label text not null,
+  version_label text not null default 'v1.0',
   change_summary text default '',
   created_at timestamptz default now()
 );
 
 alter table public.project_versions add column if not exists project_id uuid references public.projects(id) on delete cascade;
-alter table public.project_versions add column if not exists version_label text;
+alter table public.project_versions add column if not exists version_label text default 'v1.0';
 alter table public.project_versions add column if not exists change_summary text default '';
 alter table public.project_versions add column if not exists created_at timestamptz default now();
 
+update public.project_versions set version_label = 'v1.0' where version_label is null;
+alter table public.project_versions alter column version_label set default 'v1.0';
+alter table public.project_versions alter column version_label set not null;
+alter table public.project_versions alter column change_summary set default '';
+
+-- Project files
+-- IMPORTANT:
+-- version_group and original_name are intentionally nullable for MVP compatibility.
+-- Older code may insert only version_id, file_name, file_url, file_size.
 create table if not exists public.project_files (
   id uuid primary key default gen_random_uuid(),
   version_id uuid not null references public.project_versions(id) on delete cascade,
+  version_group uuid references public.project_versions(id) on delete cascade,
   file_name text not null,
-  file_url text not null,
+  original_name text,
+  file_url text not null default '',
   file_size bigint default 0,
+  size_bytes bigint default 0,
   created_at timestamptz default now()
 );
 
 alter table public.project_files add column if not exists version_id uuid references public.project_versions(id) on delete cascade;
+alter table public.project_files add column if not exists version_group uuid references public.project_versions(id) on delete cascade;
 alter table public.project_files add column if not exists file_name text;
-alter table public.project_files add column if not exists file_url text;
+alter table public.project_files add column if not exists original_name text;
+alter table public.project_files add column if not exists file_url text default '';
 alter table public.project_files add column if not exists file_size bigint default 0;
+alter table public.project_files add column if not exists size_bytes bigint default 0;
 alter table public.project_files add column if not exists created_at timestamptz default now();
 
+update public.project_files
+set version_group = version_id
+where version_group is null and version_id is not null;
+
+update public.project_files
+set original_name = coalesce(original_name, file_name, 'download')
+where original_name is null;
+
+update public.project_files
+set file_name = coalesce(file_name, original_name, 'download')
+where file_name is null;
+
+update public.project_files
+set file_url = coalesce(file_url, '')
+where file_url is null;
+
+update public.project_files
+set file_size = coalesce(file_size, size_bytes, 0)
+where file_size is null;
+
+update public.project_files
+set size_bytes = coalesce(size_bytes, file_size, 0)
+where size_bytes is null;
+
+alter table public.project_files alter column version_group drop not null;
+alter table public.project_files alter column original_name drop not null;
+alter table public.project_files alter column original_name set default 'download';
+alter table public.project_files alter column file_url set default '';
+alter table public.project_files alter column file_size set default 0;
+alter table public.project_files alter column size_bytes set default 0;
+alter table public.project_files alter column file_name set not null;
+alter table public.project_files alter column file_url set not null;
+
+-- Comments
 create table if not exists public.comments (
   id uuid primary key default gen_random_uuid(),
-  target_type text not null check (target_type in ('project', 'idea', 'insight', 'announcement', 'community')),
+  target_type text not null,
   target_id uuid not null,
   parent_id uuid references public.comments(id) on delete cascade,
-  depth integer not null default 0 check (depth between 0 and 2),
+  depth integer not null default 0,
   author_name text not null default 'A&I Builder',
   body text not null,
   feedback_type text,
@@ -79,10 +151,23 @@ alter table public.comments add column if not exists body text;
 alter table public.comments add column if not exists feedback_type text;
 alter table public.comments add column if not exists created_at timestamptz default now();
 
+update public.comments set depth = 0 where depth is null;
+update public.comments set author_name = 'A&I Builder' where author_name is null;
+
 alter table public.comments drop constraint if exists comments_target_type_check;
 alter table public.comments add constraint comments_target_type_check
 check (target_type in ('project', 'idea', 'insight', 'announcement', 'community'));
 
+alter table public.comments drop constraint if exists comments_depth_check;
+alter table public.comments add constraint comments_depth_check
+check (depth between 0 and 2);
+
+alter table public.comments alter column depth set not null;
+alter table public.comments alter column depth set default 0;
+alter table public.comments alter column author_name set not null;
+alter table public.comments alter column author_name set default 'A&I Builder';
+
+-- Community posts
 create table if not exists public.community_posts (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -100,6 +185,7 @@ alter table public.community_posts add column if not exists category text defaul
 alter table public.community_posts add column if not exists created_at timestamptz default now();
 alter table public.community_posts add column if not exists updated_at timestamptz default now();
 
+-- Chat messages
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   author_name text not null,
@@ -111,6 +197,7 @@ alter table public.chat_messages add column if not exists author_name text;
 alter table public.chat_messages add column if not exists body text;
 alter table public.chat_messages add column if not exists created_at timestamptz default now();
 
+-- Ideas
 create table if not exists public.ideas (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -126,6 +213,7 @@ alter table public.ideas add column if not exists author_name text default 'A&I 
 alter table public.ideas add column if not exists created_at timestamptz default now();
 alter table public.ideas add column if not exists updated_at timestamptz default now();
 
+-- Insights
 create table if not exists public.insights (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -143,6 +231,7 @@ alter table public.insights add column if not exists source_url text;
 alter table public.insights add column if not exists created_at timestamptz default now();
 alter table public.insights add column if not exists updated_at timestamptz default now();
 
+-- Announcements
 create table if not exists public.announcements (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -158,11 +247,15 @@ alter table public.announcements add column if not exists author_name text defau
 alter table public.announcements add column if not exists created_at timestamptz default now();
 alter table public.announcements add column if not exists updated_at timestamptz default now();
 
+-- Indexes
 create index if not exists project_versions_project_id_created_at_idx
 on public.project_versions(project_id, created_at desc);
 
 create index if not exists project_files_version_id_created_at_idx
 on public.project_files(version_id, created_at desc);
+
+create index if not exists project_files_version_group_created_at_idx
+on public.project_files(version_group, created_at desc);
 
 create index if not exists comments_target_idx
 on public.comments(target_type, target_id, created_at desc);
@@ -182,6 +275,7 @@ on public.insights(created_at desc);
 create index if not exists announcements_created_at_idx
 on public.announcements(created_at desc);
 
+-- RLS
 alter table public.projects enable row level security;
 alter table public.project_versions enable row level security;
 alter table public.project_files enable row level security;
@@ -192,6 +286,8 @@ alter table public.ideas enable row level security;
 alter table public.insights enable row level security;
 alter table public.announcements enable row level security;
 
+-- Public MVP policies
+-- Projects
 drop policy if exists "public read projects" on public.projects;
 drop policy if exists "public insert projects" on public.projects;
 drop policy if exists "public update projects" on public.projects;
@@ -201,6 +297,7 @@ create policy "public insert projects" on public.projects for insert with check 
 create policy "public update projects" on public.projects for update using (true) with check (true);
 create policy "public delete projects" on public.projects for delete using (true);
 
+-- Project versions
 drop policy if exists "public read project versions" on public.project_versions;
 drop policy if exists "public insert project versions" on public.project_versions;
 drop policy if exists "public update project versions" on public.project_versions;
@@ -210,6 +307,7 @@ create policy "public insert project versions" on public.project_versions for in
 create policy "public update project versions" on public.project_versions for update using (true) with check (true);
 create policy "public delete project versions" on public.project_versions for delete using (true);
 
+-- Project files
 drop policy if exists "public read project files" on public.project_files;
 drop policy if exists "public insert project files" on public.project_files;
 drop policy if exists "public update project files" on public.project_files;
@@ -219,6 +317,7 @@ create policy "public insert project files" on public.project_files for insert w
 create policy "public update project files" on public.project_files for update using (true) with check (true);
 create policy "public delete project files" on public.project_files for delete using (true);
 
+-- Comments
 drop policy if exists "public read comments" on public.comments;
 drop policy if exists "public insert comments" on public.comments;
 drop policy if exists "public update comments" on public.comments;
@@ -228,6 +327,7 @@ create policy "public insert comments" on public.comments for insert with check 
 create policy "public update comments" on public.comments for update using (true) with check (true);
 create policy "public delete comments" on public.comments for delete using (true);
 
+-- Community posts
 drop policy if exists "public read community posts" on public.community_posts;
 drop policy if exists "public insert community posts" on public.community_posts;
 drop policy if exists "public update community posts" on public.community_posts;
@@ -237,6 +337,7 @@ create policy "public insert community posts" on public.community_posts for inse
 create policy "public update community posts" on public.community_posts for update using (true) with check (true);
 create policy "public delete community posts" on public.community_posts for delete using (true);
 
+-- Chat messages
 drop policy if exists "public read chat messages" on public.chat_messages;
 drop policy if exists "public insert chat messages" on public.chat_messages;
 drop policy if exists "public update chat messages" on public.chat_messages;
@@ -246,6 +347,7 @@ create policy "public insert chat messages" on public.chat_messages for insert w
 create policy "public update chat messages" on public.chat_messages for update using (true) with check (true);
 create policy "public delete chat messages" on public.chat_messages for delete using (true);
 
+-- Realtime chat messages
 do $$
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
@@ -261,6 +363,7 @@ begin
   end if;
 end $$;
 
+-- Ideas
 drop policy if exists "public read ideas" on public.ideas;
 drop policy if exists "public insert ideas" on public.ideas;
 drop policy if exists "public update ideas" on public.ideas;
@@ -270,6 +373,7 @@ create policy "public insert ideas" on public.ideas for insert with check (true)
 create policy "public update ideas" on public.ideas for update using (true) with check (true);
 create policy "public delete ideas" on public.ideas for delete using (true);
 
+-- Insights
 drop policy if exists "public read insights" on public.insights;
 drop policy if exists "public insert insights" on public.insights;
 drop policy if exists "public update insights" on public.insights;
@@ -279,6 +383,7 @@ create policy "public insert insights" on public.insights for insert with check 
 create policy "public update insights" on public.insights for update using (true) with check (true);
 create policy "public delete insights" on public.insights for delete using (true);
 
+-- Announcements
 drop policy if exists "public read announcements" on public.announcements;
 drop policy if exists "public insert announcements" on public.announcements;
 drop policy if exists "public update announcements" on public.announcements;
@@ -288,6 +393,9 @@ create policy "public insert announcements" on public.announcements for insert w
 create policy "public update announcements" on public.announcements for update using (true) with check (true);
 create policy "public delete announcements" on public.announcements for delete using (true);
 
+-- Storage object policies for public MVP uploads
+-- These allow anonymous read/write for MVP testing.
+-- Tighten these after login/auth is implemented.
 drop policy if exists "public read a-and-i storage objects" on storage.objects;
 drop policy if exists "public insert a-and-i storage objects" on storage.objects;
 drop policy if exists "public update a-and-i storage objects" on storage.objects;
