@@ -126,7 +126,9 @@ function App() {
   const [detailTab, setDetailTab] = useState("intro");
 
   const refresh = useCallback(async () => {
+    console.log("[A&I data-refresh] loadAllData start");
     const result = await loadAllData();
+    console.log("[A&I data-refresh] loadAllData success", { source: result.source });
     setLoadError(null);
     setData(result.data);
     return result.data;
@@ -171,65 +173,152 @@ function App() {
   async function runTask(task, successTitle, successBody = "") {
     setIsBusy(true);
     try {
+      console.log("[A&I async-task] task start");
       const result = await task();
+      console.log("[A&I async-task] task success");
+      console.log("[A&I async-task] refresh start");
       await refresh();
+      console.log("[A&I async-task] refresh success");
       showToast("success", successTitle, successBody);
       return result;
     } catch (error) {
+      console.error("[A&I async-task] error", error);
       showToast("error", "처리하지 못했습니다", error.message);
       return null;
     } finally {
+      console.log("[A&I async-task] FINALLY loading reset");
       setIsBusy(false);
     }
   }
 
   async function handleCreateProject(form) {
-    const project = await runTask(
-      async () => {
-        const thumbnailUrl = await uploadThumbnail(form.thumbnailFile);
-        const savedProject = await createRecord("projects", {
-          title: form.title.trim(),
-          builder_name: form.builder_name.trim(),
-          description: form.description.trim(),
-          category: form.category,
-          thumbnail_url: thumbnailUrl,
-          demo_url: form.demo_url.trim(),
-          github_url: form.github_url.trim(),
-        });
+    setIsBusy(true);
+    try {
+      const hasFiles = form.files.length > 0;
+      const hasVersionInfo = form.version_label.trim() || form.change_summary.trim();
+      console.log("[A&I project-create] START", {
+        fileCount: form.files.length,
+        hasThumbnail: Boolean(form.thumbnailFile),
+        hasVersionInfo: Boolean(hasVersionInfo),
+      });
+      console.log("[A&I project-create] STEP 1 thumbnail upload start");
+      const thumbnailUrl = await uploadThumbnail(form.thumbnailFile);
+      console.log("[A&I project-create] STEP 1 thumbnail upload success", { thumbnailUrl });
+      console.log("[A&I project-create] STEP 2 projects insert start");
+      const savedProject = await createRecord("projects", {
+        title: form.title.trim(),
+        builder_name: form.builder_name.trim(),
+        description: form.description.trim(),
+        category: form.category,
+        thumbnail_url: thumbnailUrl,
+        demo_url: form.demo_url.trim(),
+        github_url: form.github_url.trim(),
+      });
+      console.log("[A&I project-create] STEP 2 projects insert success", { projectId: savedProject.id });
+      let savedVersion = null;
+      const savedFiles = [];
 
-        const version = await createRecord("projectVersions", {
+      if (hasFiles || hasVersionInfo) {
+        console.log("[A&I project-create] STEP 3 project_versions insert start");
+        savedVersion = await createRecord("projectVersions", {
           project_id: savedProject.id,
           version_label: form.version_label.trim() || "v1.0",
           change_summary: form.change_summary.trim() || "프로젝트가 등록되었습니다.",
         });
+        console.log("[A&I project-create] STEP 3 project_versions insert success", { versionId: savedVersion.id });
 
-        for (const file of form.files) {
-          await uploadProjectFile({ file, versionId: version.id });
+        for (const [index, file] of form.files.entries()) {
+          console.log("[A&I project-create] STEP 4 project file upload start", {
+            fileIndex: index,
+            fileName: file.name,
+            versionId: savedVersion.id,
+          });
+          savedFiles.push(await uploadProjectFile({ file, versionId: savedVersion.id }));
+          console.log("[A&I project-create] STEP 4 project file upload success", {
+            fileIndex: index,
+            fileName: file.name,
+          });
         }
+      } else {
+        console.log("[A&I project-create] STEP 3 project_versions skipped");
+      }
 
-        return savedProject;
-      },
-      "프로젝트가 등록되었습니다",
-      "첫 번째 빌더 루프를 시작할 수 있습니다.",
-    );
+      console.log("[A&I project-create] STEP 5 optimistic state update start");
+      setData((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          projects: [savedProject, ...current.projects.filter((item) => item.id !== savedProject.id)],
+          projectVersions: savedVersion
+            ? [savedVersion, ...current.projectVersions.filter((item) => item.id !== savedVersion.id)]
+            : current.projectVersions,
+          projectFiles: savedFiles.length
+            ? [
+                ...savedFiles,
+                ...current.projectFiles.filter((item) => !savedFiles.some((file) => file.id === item.id)),
+              ]
+            : current.projectFiles,
+        };
+      });
+      console.log("[A&I project-create] STEP 5 optimistic state update queued");
 
-    if (project) navigate(`/projects/${project.id}`);
+      let refreshError = null;
+      try {
+        console.log("[A&I project-create] STEP 6 workspace refresh start");
+        await refresh();
+        console.log("[A&I project-create] STEP 6 workspace refresh success");
+      } catch (error) {
+        console.error("[A&I project-create] STEP 6 workspace refresh error", error);
+        refreshError = error;
+      }
+
+      if (refreshError) {
+        showToast("error", "프로젝트는 저장됐지만 새로고침에 실패했습니다", refreshError.message);
+      } else {
+        showToast("success", "프로젝트가 등록되었습니다", "첫 번째 빌더 루프를 시작할 수 있습니다.");
+      }
+      console.log("[A&I project-create] STEP 7 navigate start", { projectId: savedProject.id });
+      navigate(`/projects/${savedProject.id}`);
+      console.log("[A&I project-create] STEP 7 navigate success");
+      return savedProject;
+    } catch (error) {
+      console.error("[A&I project-create] FAILED", error);
+      showToast("error", "처리하지 못했습니다", error.message);
+      return null;
+    } finally {
+      console.log("[A&I project-create] FINALLY loading reset");
+      setIsBusy(false);
+    }
   }
 
   async function handleCreateVersion(projectId, form) {
-    await runTask(
+    return runTask(
       async () => {
+        console.log("[A&I project-version] STEP 1 project_versions insert start", { projectId });
         const version = await createRecord("projectVersions", {
           project_id: projectId,
           version_label: form.version_label.trim(),
           change_summary: form.change_summary.trim(),
         });
+        console.log("[A&I project-version] STEP 1 project_versions insert success", { versionId: version.id });
 
-        for (const file of form.files) {
+        for (const [index, file] of form.files.entries()) {
+          console.log("[A&I project-version] STEP 2 project file upload start", {
+            fileIndex: index,
+            fileName: file.name,
+            versionId: version.id,
+          });
           await uploadProjectFile({ file, versionId: version.id });
+          console.log("[A&I project-version] STEP 2 project file upload success", {
+            fileIndex: index,
+            fileName: file.name,
+          });
         }
 
+        console.log("[A&I project-version] STEP 3 projects update start", { projectId });
         await updateRecord("projects", projectId, {});
+        console.log("[A&I project-version] STEP 3 projects update success", { projectId });
+        return version;
       },
       "새 버전이 업로드되었습니다",
       "파일 탭과 업데이트 기록에 반영했습니다.",
@@ -254,7 +343,7 @@ function App() {
   }
 
   async function handleCreateComment(projectId, payload) {
-    await runTask(
+    return runTask(
       () =>
         createRecord("comments", {
           target_type: "project",
@@ -282,6 +371,7 @@ function App() {
     );
 
     if (post) navigate(`/community/${post.id}`);
+    return post;
   }
 
   async function handleUpdateCommunityPost(postId, payload) {
@@ -309,7 +399,7 @@ function App() {
   }
 
   async function handleCreateCommunityComment(postId, payload) {
-    await runTask(
+    return runTask(
       () =>
         createRecord("comments", {
           target_type: "community",
@@ -334,6 +424,7 @@ function App() {
     );
 
     if (item) navigate(`/${collection}/${item.id}`);
+    return item;
   }
 
   async function handleUpdateContent(collection, itemId, form) {
@@ -363,7 +454,7 @@ function App() {
     const config = contentConfig[collection];
     if (!config) return;
 
-    await runTask(
+    return runTask(
       () =>
         createRecord("comments", {
           target_type: config.targetType,
@@ -487,6 +578,7 @@ function renderPage(context) {
       <ProjectDetailPage
         data={data}
         detailTab={context.detailTab}
+        isBusy={context.isBusy}
         navigate={navigate}
         onCreateComment={context.onCreateComment}
         onCreateVersion={context.onCreateVersion}
@@ -535,6 +627,7 @@ function renderPage(context) {
         collection={section}
         data={data}
         id={id}
+        isBusy={context.isBusy}
         navigate={navigate}
         onCreateComment={(payload) => context.onCreateContentComment(section, id, payload)}
         onDelete={() => context.onDeleteContent(section, id)}
@@ -578,6 +671,7 @@ function renderPage(context) {
     return (
       <CommunityPostDetailPage
         data={data}
+        isBusy={context.isBusy}
         navigate={navigate}
         onCreateComment={context.onCreateCommunityComment}
         onDeletePost={context.onDeleteCommunityPost}
@@ -927,10 +1021,10 @@ function ProjectForm({ isBusy, onSubmit }) {
     update("files", Array.from(fileList || []));
   }
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     if (!isReady) return;
-    onSubmit(form);
+    await onSubmit(form);
   }
 
   return (
@@ -1004,7 +1098,7 @@ function ProjectForm({ isBusy, onSubmit }) {
         <div className="form-actions span-2">
           <button className="primary-button" disabled={!isReady} type="submit">
             <Plus size={17} />
-            프로젝트 등록
+            {isBusy ? "등록 중..." : "프로젝트 등록"}
           </button>
         </div>
       </div>
@@ -1015,6 +1109,7 @@ function ProjectForm({ isBusy, onSubmit }) {
 function ProjectDetailPage({
   data,
   detailTab,
+  isBusy,
   navigate,
   onCreateComment,
   onCreateVersion,
@@ -1055,6 +1150,7 @@ function ProjectDetailPage({
       {detailTab === "files" && (
         <ProjectVersionsList
           data={data}
+          isBusy={isBusy}
           onCreateVersion={(form) => onCreateVersion(project.id, form)}
           onDownloadVersion={(version) => onDownloadVersion(project, version)}
           project={project}
@@ -1064,8 +1160,8 @@ function ProjectDetailPage({
       {detailTab === "feedback" && (
         <section className="content-section" id="project-feedback">
           <SectionHeading title="피드백" description="다운로드하거나 데모를 본 뒤 짧게 남겨 주세요." />
-          <CommentComposer onSubmit={(payload) => onCreateComment(project.id, payload)} />
-          <CommentThread comments={comments} onReply={(payload) => onCreateComment(project.id, payload)} />
+          <CommentComposer isBusy={isBusy} onSubmit={(payload) => onCreateComment(project.id, payload)} />
+          <CommentThread comments={comments} isBusy={isBusy} onReply={(payload) => onCreateComment(project.id, payload)} />
         </section>
       )}
       {detailTab === "updates" && <ProjectUpdates data={data} project={project} versions={versions} />}
@@ -1227,7 +1323,7 @@ function ProjectIntro({ project }) {
   );
 }
 
-function ProjectVersionsList({ data, onCreateVersion, onDownloadVersion, project, versions }) {
+function ProjectVersionsList({ data, isBusy, onCreateVersion, onDownloadVersion, project, versions }) {
   const [openUpload, setOpenUpload] = useState(false);
   const latest = versions[0];
   const previous = versions.slice(1);
@@ -1236,17 +1332,18 @@ function ProjectVersionsList({ data, onCreateVersion, onDownloadVersion, project
     <section className="content-section">
       <div className="section-head-row">
         <SectionHeading title="파일" description="버전마다 파일을 분리해 다운로드할 수 있습니다." />
-        <button className="secondary-button" type="button" onClick={() => setOpenUpload((value) => !value)}>
+        <button className="secondary-button" disabled={isBusy} type="button" onClick={() => setOpenUpload((value) => !value)}>
           <Upload size={17} />
           새 버전 업로드
         </button>
       </div>
       {openUpload && (
         <VersionUploadForm
+          isBusy={isBusy}
           onCancel={() => setOpenUpload(false)}
           onSubmit={async (form) => {
-            await onCreateVersion(form);
-            setOpenUpload(false);
+            const saved = await onCreateVersion(form);
+            if (saved !== null) setOpenUpload(false);
           }}
         />
       )}
@@ -1283,15 +1380,15 @@ function ProjectVersionsList({ data, onCreateVersion, onDownloadVersion, project
   );
 }
 
-function VersionUploadForm({ onCancel, onSubmit }) {
+function VersionUploadForm({ isBusy, onCancel, onSubmit }) {
   const [form, setForm] = useState({ version_label: "", change_summary: "", files: [] });
-  const ready = form.version_label.trim() && form.change_summary.trim() && form.files.length > 0;
+  const ready = form.version_label.trim() && form.change_summary.trim() && form.files.length > 0 && !isBusy;
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     if (ready) onSubmit(form);
   }
@@ -1318,11 +1415,11 @@ function VersionUploadForm({ onCancel, onSubmit }) {
         <small>{form.files.length ? `${form.files.length}개 파일 선택됨` : "새 버전에 포함할 파일을 선택해 주세요."}</small>
       </label>
       <div className="form-actions">
-        <button className="secondary-button" type="button" onClick={onCancel}>
+        <button className="secondary-button" disabled={isBusy} type="button" onClick={onCancel}>
           닫기
         </button>
         <button className="primary-button" disabled={!ready} type="submit">
-          버전 업로드
+          {isBusy ? "업로드 중..." : "버전 업로드"}
         </button>
       </div>
     </form>
@@ -1357,7 +1454,7 @@ function ProjectVersionCard({ files, isLatest = false, onDownload, version }) {
         ) : (
           <li>
             <FileText size={16} />
-            <span>첨부 파일 없음</span>
+            <span>아직 업로드된 파일이 없습니다.</span>
             <small>0 B</small>
           </li>
         )}
@@ -1366,27 +1463,27 @@ function ProjectVersionCard({ files, isLatest = false, onDownload, version }) {
   );
 }
 
-function CommentComposer({ feedbackEnabled = true, onSubmit, parent = null }) {
+function CommentComposer({ feedbackEnabled = true, isBusy = false, onSubmit, parent = null }) {
   const [authorName, setAuthorName] = useState(localStorage.getItem("a-and-i-commenter") || "");
   const [feedbackType, setFeedbackType] = useState(feedbackTypes[0]);
   const [body, setBody] = useState("");
   const isReply = Boolean(parent);
   const showFeedbackSelector = feedbackEnabled && !isReply;
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const nextAuthorName = String(formData.get("author_name") || "").trim();
     const nextBody = String(formData.get("body") || "").trim();
-    if (!nextAuthorName || !nextBody) return;
+    if (!nextAuthorName || !nextBody || isBusy) return;
     localStorage.setItem("a-and-i-commenter", nextAuthorName);
-    onSubmit({
+    const saved = await onSubmit({
       author_name: nextAuthorName,
       body: nextBody,
       feedback_type: showFeedbackSelector ? feedbackType : null,
       parent,
     });
-    setBody("");
+    if (saved !== null) setBody("");
   }
 
   return (
@@ -1398,6 +1495,7 @@ function CommentComposer({ feedbackEnabled = true, onSubmit, parent = null }) {
               className={feedbackType === type ? "active" : ""}
               key={type}
               type="button"
+              disabled={isBusy}
               onClick={() => setFeedbackType(type)}
             >
               {type}
@@ -1431,9 +1529,9 @@ function CommentComposer({ feedbackEnabled = true, onSubmit, parent = null }) {
         />
       </div>
       <div className="comment-actions">
-        <button className="primary-button" type="submit">
+        <button className="primary-button" disabled={isBusy} type="submit">
           <Send size={16} />
-          {isReply ? "답글 등록" : feedbackEnabled ? "피드백 등록" : "댓글 등록"}
+          {isBusy ? "저장 중..." : isReply ? "답글 등록" : feedbackEnabled ? "피드백 등록" : "댓글 등록"}
         </button>
       </div>
     </form>
@@ -1445,6 +1543,7 @@ function CommentThread({
   emptyBody = "첫 피드백을 남겨 프로젝트를 함께 다듬어 보세요.",
   emptyTitle = "아직 피드백이 없습니다",
   feedbackEnabled = true,
+  isBusy = false,
   onReply,
 }) {
   const tree = useMemo(() => buildCommentTree(comments), [comments]);
@@ -1456,13 +1555,13 @@ function CommentThread({
   return (
     <div className="comment-thread">
       {tree.map((comment) => (
-        <CommentItem comment={comment} feedbackEnabled={feedbackEnabled} key={comment.id} onReply={onReply} />
+        <CommentItem comment={comment} feedbackEnabled={feedbackEnabled} isBusy={isBusy} key={comment.id} onReply={onReply} />
       ))}
     </div>
   );
 }
 
-function CommentItem({ comment, feedbackEnabled, onReply }) {
+function CommentItem({ comment, feedbackEnabled, isBusy, onReply }) {
   const [replyOpen, setReplyOpen] = useState(false);
   const canReply = Number(comment.depth || 0) < 2;
 
@@ -1478,7 +1577,7 @@ function CommentItem({ comment, feedbackEnabled, onReply }) {
           </div>
           <p>{comment.body}</p>
           {canReply && (
-            <button className="text-button" type="button" onClick={() => setReplyOpen((value) => !value)}>
+            <button className="text-button" disabled={isBusy} type="button" onClick={() => setReplyOpen((value) => !value)}>
               <Reply size={15} />
               답글
             </button>
@@ -1486,10 +1585,12 @@ function CommentItem({ comment, feedbackEnabled, onReply }) {
           {replyOpen && (
             <CommentComposer
               feedbackEnabled={feedbackEnabled}
+              isBusy={isBusy}
               parent={comment}
-              onSubmit={(payload) => {
-                onReply(payload);
-                setReplyOpen(false);
+              onSubmit={async (payload) => {
+                const saved = await onReply(payload);
+                if (saved !== null) setReplyOpen(false);
+                return saved;
               }}
             />
           )}
@@ -1498,7 +1599,7 @@ function CommentItem({ comment, feedbackEnabled, onReply }) {
       {comment.children?.length > 0 && (
         <div className="comment-children">
           {comment.children.map((child) => (
-            <CommentItem comment={child} feedbackEnabled={feedbackEnabled} key={child.id} onReply={onReply} />
+            <CommentItem comment={child} feedbackEnabled={feedbackEnabled} isBusy={isBusy} key={child.id} onReply={onReply} />
           ))}
         </div>
       )}
@@ -1633,7 +1734,7 @@ function CommunityPostForm({ initialPost = null, isBusy, mode, onCancel, onSubmi
     setForm((current) => ({ ...current, [field]: value }));
   }
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const nextForm = {
@@ -1644,7 +1745,7 @@ function CommunityPostForm({ initialPost = null, isBusy, mode, onCancel, onSubmi
     };
     if (!nextForm.title || !nextForm.author_name || !nextForm.body || isBusy) return;
     localStorage.setItem("a-and-i-builder-name", nextForm.author_name);
-    onSubmit(nextForm);
+    await onSubmit(nextForm);
   }
 
   return (
@@ -1686,14 +1787,14 @@ function CommunityPostForm({ initialPost = null, isBusy, mode, onCancel, onSubmi
           목록으로
         </button>
         <button className="primary-button" disabled={isBusy} type="submit">
-          {isEdit ? "수정" : "작성"}
+          {isBusy ? "저장 중..." : isEdit ? "수정" : "작성"}
         </button>
       </div>
     </form>
   );
 }
 
-function CommunityPostDetailPage({ data, navigate, onCreateComment, onDeletePost, postId }) {
+function CommunityPostDetailPage({ data, isBusy, navigate, onCreateComment, onDeletePost, postId }) {
   const post = data.communityPosts.find((item) => item.id === postId);
 
   if (!post) {
@@ -1729,12 +1830,13 @@ function CommunityPostDetailPage({ data, navigate, onCreateComment, onDeletePost
       </article>
       <section className="content-section">
         <SectionHeading title="댓글" description="피드백 유형 없이 자유롭게 이야기할 수 있습니다." />
-        <CommentComposer feedbackEnabled={false} onSubmit={(payload) => onCreateComment(post.id, payload)} />
+        <CommentComposer feedbackEnabled={false} isBusy={isBusy} onSubmit={(payload) => onCreateComment(post.id, payload)} />
         <CommentThread
           comments={comments}
           emptyBody="첫 댓글로 대화를 열어 보세요."
           emptyTitle="아직 댓글이 없습니다"
           feedbackEnabled={false}
+          isBusy={isBusy}
           onReply={(payload) => onCreateComment(post.id, payload)}
         />
       </section>
@@ -1802,7 +1904,7 @@ function ChatPage({ data, isBusy, onIncomingMessage, onSendMessage }) {
           />
           <button className="primary-button" disabled={isBusy} type="submit">
             <Send size={16} />
-            전송
+            {isBusy ? "전송 중..." : "전송"}
           </button>
         </form>
       </section>
@@ -1937,7 +2039,7 @@ function ContentForm({ collection, initialItem = null, isBusy, mode, onCancel, o
     setForm((current) => ({ ...current, [field]: value }));
   }
 
-  function submit(event) {
+  async function submit(event) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const nextForm = {
@@ -1948,7 +2050,7 @@ function ContentForm({ collection, initialItem = null, isBusy, mode, onCancel, o
     };
     if (!nextForm.title || !nextForm.author_name || !nextForm.body || isBusy) return;
     localStorage.setItem("a-and-i-builder-name", nextForm.author_name);
-    onSubmit(nextForm);
+    await onSubmit(nextForm);
   }
 
   return (
@@ -1989,14 +2091,14 @@ function ContentForm({ collection, initialItem = null, isBusy, mode, onCancel, o
           목록으로
         </button>
         <button className="primary-button" disabled={isBusy} type="submit">
-          {isEdit ? "수정" : "작성"}
+          {isBusy ? "저장 중..." : isEdit ? "수정" : "작성"}
         </button>
       </div>
     </form>
   );
 }
 
-function ContentDetailPage({ collection, data, id, navigate, onCreateComment, onDelete }) {
+function ContentDetailPage({ collection, data, id, isBusy, navigate, onCreateComment, onDelete }) {
   const config = contentConfig[collection];
   const item = data[collection].find((candidate) => candidate.id === id);
 
@@ -2039,12 +2141,13 @@ function ContentDetailPage({ collection, data, id, navigate, onCreateComment, on
       </article>
       <section className="content-section">
         <SectionHeading title="댓글" description="피드백 유형 없이 자유롭게 의견을 남길 수 있습니다." />
-        <CommentComposer feedbackEnabled={false} onSubmit={onCreateComment} />
+        <CommentComposer feedbackEnabled={false} isBusy={isBusy} onSubmit={onCreateComment} />
         <CommentThread
           comments={comments}
           emptyBody="첫 댓글을 남겨 대화를 시작해 보세요."
           emptyTitle="아직 댓글이 없습니다"
           feedbackEnabled={false}
+          isBusy={isBusy}
           onReply={onCreateComment}
         />
       </section>
@@ -2172,7 +2275,7 @@ function EditProjectDialog({ isBusy, onClose, onSubmit, project }) {
             취소
           </button>
           <button className="primary-button" disabled={isBusy} type="submit">
-            저장
+            {isBusy ? "저장 중..." : "저장"}
           </button>
         </div>
       </form>

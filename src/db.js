@@ -39,9 +39,18 @@ export async function loadAllData() {
 async function fetchSupabaseData() {
   const entries = await Promise.all(
     Object.entries(tableMap).map(async ([key, table]) => {
+      console.log("[A&I data-refresh] table select start", { collection: key, table });
       const { data, error } = await supabase.from(table).select("*").order("created_at", { ascending: false });
 
-      if (error) throw formatSupabaseError(error);
+      console.log("[A&I data-refresh] table select finished", {
+        collection: key,
+        hasError: Boolean(error),
+        rowCount: data?.length ?? 0,
+      });
+      if (error) {
+        console.error("[A&I data-refresh] table select error", { collection: key, table, error });
+        throw formatSupabaseError(error);
+      }
       return [key, data ?? []];
     }),
   );
@@ -61,6 +70,7 @@ function normalizeWorkspace(state) {
     })),
     projectFiles: state.projectFiles.map((file) => ({
       ...file,
+      version_id: file.version_id || file.project_version_id || file.projectVersionId || null,
       file_size: Number(file.file_size ?? file.size_bytes ?? 0),
       file_url: file.file_url || file.public_url || file.external_url || "",
       file_name: file.file_name || file.original_name || "download",
@@ -169,16 +179,29 @@ export function subscribeToChatMessages(onInsert) {
 }
 
 export async function uploadThumbnail(file) {
-  if (!file) return null;
+  if (!file) {
+    console.log("[A&I project-create] STORAGE thumbnail skipped");
+    return null;
+  }
   if (!file.type?.startsWith("image/")) {
     throw new Error("썸네일은 이미지 파일만 사용할 수 있습니다.");
   }
 
   ensureSupabaseReady();
   const storagePath = `${Date.now()}-${safeFileName(file.name)}`;
+  console.log("[A&I project-create] STORAGE thumbnail upload request start", {
+    bucket: thumbnailBucket,
+    fileName: file.name,
+    storagePath,
+  });
   const { error } = await supabase.storage.from(thumbnailBucket).upload(storagePath, file, { upsert: false });
-  if (error) throw formatSupabaseError(error);
+  console.log("[A&I project-create] STORAGE thumbnail upload request finished", { hasError: Boolean(error) });
+  if (error) {
+    console.error("[A&I project-create] STORAGE thumbnail upload error", error);
+    throw formatSupabaseError(error);
+  }
   const { data } = supabase.storage.from(thumbnailBucket).getPublicUrl(storagePath);
+  console.log("[A&I project-create] STORAGE thumbnail public URL ready");
   return data.publicUrl;
 }
 
@@ -191,14 +214,28 @@ export async function uploadProjectFile({ file, versionId }) {
 
   ensureSupabaseReady();
   const storagePath = `${versionId}/${Date.now()}-${safeFileName(file.name)}`;
+  console.log("[A&I project-create] STORAGE project file upload request start", {
+    bucket: projectFileBucket,
+    fileName: file.name,
+    storagePath,
+    versionId,
+  });
   const { error } = await supabase.storage.from(projectFileBucket).upload(storagePath, file, { upsert: false });
-  if (error) throw formatSupabaseError(error);
+  console.log("[A&I project-create] STORAGE project file upload request finished", { hasError: Boolean(error) });
+  if (error) {
+    console.error("[A&I project-create] STORAGE project file upload error", error);
+    throw formatSupabaseError(error);
+  }
   const { data } = supabase.storage.from(projectFileBucket).getPublicUrl(storagePath);
+  console.log("[A&I project-create] STORAGE project file public URL ready");
 
-  return createRecord("projectFiles", {
+  console.log("[A&I project-create] STEP 4B project_files insert start", { fileName: file.name, versionId });
+  const savedFile = await createRecord("projectFiles", {
     ...payload,
     file_url: data.publicUrl,
   });
+  console.log("[A&I project-create] STEP 4B project_files insert success", { fileId: savedFile.id });
+  return savedFile;
 }
 
 export async function getProjectFileBlob(fileRecord) {
