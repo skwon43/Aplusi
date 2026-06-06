@@ -158,30 +158,25 @@ p {
   border-color: var(--border-strong);
 }
 
-.logo-block {
+.ai-logo-block {
   border: 0;
   background: transparent;
   color: var(--text);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  flex-shrink: 0;
+  min-width: fit-content;
+  padding: 0;
   text-align: left;
   text-decoration: none;
 }
 
-.logo-symbol-svg {
-  width: 36px;
-  height: 36px;
+.ai-logo-image {
+  width: 40px;
+  height: 44px;
   display: block;
   flex: 0 0 auto;
-}
-
-.logo-wordmark {
-  color: #111827;
-  font-size: 18px;
-  font-weight: 900;
-  letter-spacing: 0;
-  line-height: 1;
+  object-fit: contain;
 }
 
 .search-bar {

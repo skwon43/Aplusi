@@ -120,18 +120,21 @@ function App() {
   const [data, setData] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [toast, setToast] = useState(null);
   const [editingProject, setEditingProject] = useState(null);
   const [detailTab, setDetailTab] = useState("intro");
 
   const refresh = useCallback(async () => {
     const result = await loadAllData();
+    setLoadError(null);
     setData(result.data);
     return result.data;
   }, []);
 
   useEffect(() => {
     refresh().catch((error) => {
+      setLoadError(error);
       setToast({ tone: "error", title: "데이터를 불러오지 못했습니다", body: error.message });
     });
   }, [refresh]);
@@ -399,6 +402,16 @@ function App() {
   async function handleDownloadVersion(project, version) {
     const files = getFilesForVersion(data, version?.id);
     await downloadVersion(project, version, files);
+  }
+
+  if (!data && loadError) {
+    return (
+      <main className="loading-screen">
+        <Sparkles aria-hidden="true" />
+        <strong>Supabase 연결을 확인해 주세요.</strong>
+        <span>{loadError.message}</span>
+      </main>
+    );
   }
 
   if (!data) {

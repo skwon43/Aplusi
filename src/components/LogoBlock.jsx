@@ -1,44 +1,36 @@
-import { useState } from "react";
+const logoMarkSrc = "/brand/logo-mark.png";
 
-const logoMarkSrc = "/brand/logo-mark.svg";
-
-function LogoSymbol({ className = "", onError }) {
+function LogoSymbol({ className = "" }) {
   return (
     <img
-      aria-hidden="true"
-      alt=""
-      className={`logo-mark ${className}`.trim()}
-      onError={onError}
+      alt="A&I"
+      className={`ai-logo-image ${className}`.trim()}
       src={logoMarkSrc}
     />
   );
 }
 
-function LogoBlock({ className = "", compact = false, onClick, symbolOnly = false }) {
-  const [markFailed, setMarkFailed] = useState(false);
-  const showWordmark = !compact && !symbolOnly;
-  const showFallbackWordmark = showWordmark || markFailed;
-  const content = (
-    <>
-      {!markFailed && <LogoSymbol onError={() => setMarkFailed(true)} />}
-      {showFallbackWordmark && <span className="logo-wordmark">A&amp;I</span>}
-    </>
-  );
+function LogoBlock({ className = "", onClick }) {
+  const classNames = `ai-logo-block ${className}`.trim();
 
   if (onClick) {
     return (
       <button
-        aria-label="A&I home"
-        className={`logo-block ${className}`.trim()}
+        aria-label="A&I 홈"
+        className={classNames}
         onClick={onClick}
         type="button"
       >
-        {content}
+        <LogoSymbol />
       </button>
     );
   }
 
-  return <span className={`logo-block ${className}`.trim()}>{content}</span>;
+  return (
+    <a aria-label="A&I 홈" className={classNames} href="/">
+      <LogoSymbol />
+    </a>
+  );
 }
 
 export default LogoBlock;
